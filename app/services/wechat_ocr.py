@@ -27,7 +27,7 @@ class WeChatOCRService:
             raise Exception("未配置 WX_APPID 或 WX_SECRET")
             
         url = f"https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid={appid}&secret={secret}"
-        res = requests.get(url, timeout=5).json()
+        res = requests.get(url, timeout=5, verify=False).json()
         
         if 'access_token' in res:
             cls._access_token = res['access_token']
@@ -65,7 +65,7 @@ class WeChatOCRService:
             "file_list": [{"fileid": file_id, "max_age": 7200}]
         }
         
-        res = requests.post(download_api, json=payload, timeout=5).json()
+        res = requests.post(download_api, json=payload, timeout=5, verify=False).json()
         if res.get('errcode') != 0:
             raise Exception(f"云存储换取链接失败: {res.get('errmsg')}")
             
@@ -75,7 +75,7 @@ class WeChatOCRService:
 
         # 2. 下载图片二进制流
         img_url = file_info['download_url']
-        img_resp = requests.get(img_url, timeout=10)
+        img_resp = requests.get(img_url, timeout=10, verify=False)
         
         # 3. 调用微信 OCR 识别 (复用 recognize_bytes 逻辑)
         return cls._call_wechat_ocr(img_resp.content, token)
@@ -86,7 +86,7 @@ class WeChatOCRService:
         url = f"https://api.weixin.qq.com/cv/ocr/comm?access_token={token}"
         # 使用二进制流上传
         files = {'img': ('temp.jpg', image_bytes, 'image/jpeg')}
-        response = requests.post(url, files=files, timeout=10)
+        response = requests.post(url, files=files, timeout=10, verify=False)
         result = response.json()
         
         if result.get('errcode', 0) != 0:
