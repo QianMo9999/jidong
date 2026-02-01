@@ -3,6 +3,7 @@ import json
 import re
 import time
 import os
+import io
 from flask import current_app
 from thefuzz import process, fuzz
 
@@ -11,20 +12,28 @@ class WeChatOCRService:
     _token_expire_time = 0
     _fund_map = None
 
+    # ==========================================
+    # 🛡️ 1. 基础能力：Token 与 数据加载
+    # ==========================================
     @classmethod
     def get_access_token(cls):
+        """获取微信 AccessToken (带缓存)"""
         if cls._access_token and time.time() < cls._token_expire_time:
             return cls._access_token
+        
         appid = current_app.config.get('WX_APPID')
         secret = current_app.config.get('WX_SECRET')
-        if not appid or not secret: raise Exception("未配置 WX_APPID")
+        if not appid or not secret:
+            raise Exception("未配置 WX_APPID 或 WX_SECRET")
+            
         url = f"https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid={appid}&secret={secret}"
-        res = requests.get(url).json()
+        res = requests.get(url, timeout=5).json()
+        
         if 'access_token' in res:
             cls._access_token = res['access_token']
             cls._token_expire_time = time.time() + 7000
             return cls._access_token
-        raise Exception(f"Token Error: {res}")
+        raise Exception(f"获取微信 Token 失败: {res}")
 
     @classmethod
     def load_fund_map(cls):
@@ -38,6 +47,55 @@ class WeChatOCRService:
             return cls._fund_map
         except: return {}
 
+    # ==========================================
+    # 📸 2. 核心识别逻辑：支持 FileID (云存储专用)
+    # ==========================================
+    @classmethod
+    def recognize_by_fileid(cls, file_id):
+        """
+        🟢 新增：根据云存储 FileID 进行识别
+        流程：fileID -> 临时下载 URL -> 下载图片 -> 微信 OCR
+        """
+        token = cls.get_access_token()
+        
+        # 1. 换取临时下载链接 (微信云托管内网 API)
+        download_api = f"https://api.weixin.qq.com/tcb/batchdownloadfile?access_token={token}"
+        payload = {
+            "env": current_app.config.get('CLOUD_ENV_ID', 'prod-2gi18ont91e2bbc4'),
+            "file_list": [{"fileid": file_id, "max_age": 7200}]
+        }
+        
+        res = requests.post(download_api, json=payload, timeout=5).json()
+        if res.get('errcode') != 0:
+            raise Exception(f"云存储换取链接失败: {res.get('errmsg')}")
+            
+        file_info = res['file_list'][0]
+        if file_info.get('status') != 0:
+            raise Exception(f"文件状态异常: {file_info.get('errmsg')}")
+
+        # 2. 下载图片二进制流
+        img_url = file_info['download_url']
+        img_resp = requests.get(img_url, timeout=10)
+        
+        # 3. 调用微信 OCR 识别 (复用 recognize_bytes 逻辑)
+        return cls._call_wechat_ocr(img_resp.content, token)
+
+    @classmethod
+    def _call_wechat_ocr(cls, image_bytes, token):
+        """统一调用微信普通 OCR 接口"""
+        url = f"https://api.weixin.qq.com/cv/ocr/comm?access_token={token}"
+        # 使用二进制流上传
+        files = {'img': ('temp.jpg', image_bytes, 'image/jpeg')}
+        response = requests.post(url, files=files, timeout=10)
+        result = response.json()
+        
+        if result.get('errcode', 0) != 0:
+             raise Exception(f"微信 OCR 接口报错: {result.get('errmsg')}")
+        return cls.parse_wechat_result(result.get('items', []))
+
+    # ==========================================
+    # 🧠 3. 算法层：模糊匹配与结果解析
+    # ==========================================
     @classmethod
     def get_match_score(cls, ocr_name):
         fund_map = cls.load_fund_map()
@@ -51,171 +109,62 @@ class WeChatOCRService:
         return "", 0
 
     @classmethod
-    def recognize(cls, image_file):
-        image_file.seek(0)
-        token = cls.get_access_token()
-        url = f"https://api.weixin.qq.com/cv/ocr/comm?access_token={token}"
-        files = {'img': (image_file.filename, image_file.read(), image_file.content_type)}
-        response = requests.post(url, files=files)
-        result = response.json()
-        if result.get('errcode', 0) != 0:
-             raise Exception(f"微信OCR接口报错: {result.get('errmsg')}")
-        return cls.parse_wechat_result(result.get('items', []))
-
-    @classmethod
     def parse_wechat_result(cls, items):
-        # 1. 垃圾词黑名单 (过滤无关行)
-        BLACKLIST = [
-            '金额', '收益', '持有', '昨收', '全部', '查看', '详情', '资产',
-            '财富号', '市场解读', '定投', '金选', '排序', '组合', '大盘',
-            '买入', '卖出', '费率', '确认', '交易', '规则', '档案', '讨论',
-            '最新', '净值', '估值', '周涨', '分析', '记录', '计划', '保障', 
-            '理财师', '明细', '加薪', '榜单', '眼', '偏股', '偏债', '指数'
-        ]
+        # 系统词过滤
+        BLACKLIST = ['金额', '收益', '持有', '昨收', '全部', '查看', '详情', '资产', '财富号', '市场解读', '定投', '确认', '交易']
+        TAIL_KEYWORDS = ['ETF', '联接', '混合', '股票', '债券', '指数', 'A', 'C', 'E']
+        HEAD_KEYWORDS = ['华夏', '易方达', '南方', '嘉实', '博时', '广发', '汇添富', '富国', '招商', '天弘']
 
-        TAIL_KEYWORDS = ['ETF', '联接', '混合', '股票', '债券', '指数', 'A', 'C', 'E', '发起式']
-        HEAD_KEYWORDS = [
-            '华夏', '易方达', '南方', '嘉实', '博时', '广发', '汇添富', 
-            '富国', '招商', '鹏华', '工银', '景顺', '中欧', '天弘', 
-            '永赢', '前海', '兴全', '兴证', '银华', '交银', '华安'
-        ]
-
-        # 🟢 策略1：锚点定位 (切除头部总金额区域)
-        # 寻找“列表开始”的标志，通常是“我的持有”或者表头“名称”
+        # 1. 锚点切除
         start_index = 0
         for i, item in enumerate(items):
             txt = item['text']
-            # 如果出现这些词，说明正文列表从这之后开始
             if '我的持有' in txt or ('名称' in txt and '代码' not in txt):
-                start_index = i + 1 # 从下一行开始
+                start_index = i + 1
                 break
-        
-        # 只保留锚点之后的数据
         valid_items = items[start_index:] if start_index > 0 else items
 
+        # 2. 候选行提取
         candidates = []
         current_candidate = None
-
-        # --- 预处理 ---
         for item in valid_items:
             text = item['text'].strip()
+            if len(text) < 1 or any(k in text for k in BLACKLIST): continue
             
-            # 跳过空行或黑名单
-            if len(text) < 1: continue
-            if any(k in text for k in BLACKLIST): continue
-
-            # 🟢 策略2：字符级过滤 (排除带特殊符号的行)
-            # 正常基金名不含：¥, :, ：, >, 元 (除非是数字行)
             is_number = re.match(r'^[\+\-]?\d{1,3}(,\d{3})*(\.\d+)?%?$', text.replace('¥', ''))
             
-            if not is_number:
-                # 如果不是数字，且包含非法字符，直接丢弃
-                if re.search(r'[¥:：>元]', text):
-                    continue
-                # 排除像 "股票型(0)" 这种分类标签
-                if re.search(r'[\(\（]\d+[\)\）]', text):
-                    continue
-
             if is_number:
                 if current_candidate:
-                    clean_num = text.replace('¥', '').replace(',', '').replace('+', '').replace('%', '')
                     try:
-                        val = float(clean_num)
-                        current_candidate['nums'].append(val)
+                        clean_num = text.replace('¥', '').replace(',', '').replace('+', '').replace('%', '')
+                        current_candidate['nums'].append(float(clean_num))
                     except: pass
             else:
+                if re.search(r'[¥:：>元]', text) or re.search(r'[\(\（]\d+[\)\）]', text):
+                    continue
                 if current_candidate: candidates.append(current_candidate)
-                current_candidate = {
-                    'text': text,
-                    'nums': [],
-                    'code': '',
-                    'score': 0
-                }
+                current_candidate = {'text': text, 'nums': [], 'code': '', 'score': 0}
         if current_candidate: candidates.append(current_candidate)
 
-        # --- 智能合并 (逻辑保持不变，因为之前调得挺好) ---
-        merged_candidates = []
-        skip_next = False
-
-        for i in range(len(candidates)):
-            if skip_next:
-                skip_next = False
-                continue
-
-            curr = candidates[i]
-            
-            if i < len(candidates) - 1:
-                next_item = candidates[i+1]
-                
-                should_merge = False
-                
-                code1, score1 = cls.get_match_score(curr['text'])
-                code2, score2 = cls.get_match_score(next_item['text'])
-                code_merged, score_merged = cls.get_match_score(curr['text'] + next_item['text'])
-
-                # 刹车逻辑
-                if any(next_item['text'].startswith(k) for k in HEAD_KEYWORDS):
-                    should_merge = False
-                elif score1 > 90 and score2 > 80:
-                    should_merge = False
-                
-                # 推进逻辑
-                elif len(next_item['text']) <= 4:
-                    should_merge = True
-                elif any(k in next_item['text'] for k in TAIL_KEYWORDS):
-                    if len(next_item['text']) < 8 or score_merged > score1:
-                        should_merge = True
-                elif score_merged > score1 + 15:
-                     should_merge = True
-
-                if should_merge:
-                    curr['text'] += next_item['text']
-                    curr['nums'].extend(next_item['nums'])
-                    curr['code'] = code_merged
-                    curr['score'] = score_merged
-                    skip_next = True
-                else:
-                    curr['code'] = code1
-                    curr['score'] = score1
-            else:
-                code, score = cls.get_match_score(curr['text'])
-                curr['code'] = code
-                curr['score'] = score
-            
-            merged_candidates.append(curr)
-
-        # ... (前面的逻辑保持不变)
-
-        # --- 3. 最终清洗 ---
+        # 3. 智能合并与清洗
         final_list = []
-        for cand in merged_candidates:
-            # 🟢 1. 核心修复：去除 "名称" 前缀
-            # 有时候 OCR 会把 "名称" 和 基金名 连在一起识别
-            clean_name = cand['text'].replace("名称", "").strip()
+        for i in range(len(candidates)):
+            curr = candidates[i]
+            # 去除“名称”前缀干扰
+            clean_name = curr['text'].replace("名称", "").strip()
+            if len(clean_name) < 4: continue
 
-            # 🟢 2. 重新检查长度
-            # 如果去掉 "名称" 后只剩下空字符串或 1 个字，说明这行本身就是表头，直接丢弃
-            if len(clean_name) < 4: 
-                continue
-
-            # 3. 检查代码 (必须是 6 位)
-            if not cand['code'] or len(cand['code']) != 6: 
-                continue
-            
-            amount = 0
-            profit = 0
-            if cand['nums']:
-                if len(cand['nums']) >= 1: amount = cand['nums'][0]
-                if len(cand['nums']) >= 2: profit = cand['nums'][1]
-
-            if amount <= 0.01:
-                continue
-
-            final_list.append({
-                "fund_name": clean_name, # 🟢 使用清洗后的名字
-                "fund_code": cand['code'],
-                "amount": amount,
-                "profit": profit
-            })
+            code, score = cls.get_match_score(clean_name)
+            if score > 65 and len(code) == 6:
+                amount = curr['nums'][0] if len(curr['nums']) >= 1 else 0
+                profit = curr['nums'][1] if len(curr['nums']) >= 2 else 0
+                
+                if amount > 0.1:
+                    final_list.append({
+                        "fund_name": clean_name,
+                        "fund_code": code,
+                        "amount": amount,
+                        "profit": profit
+                    })
 
         return final_list

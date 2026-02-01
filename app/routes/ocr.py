@@ -1,8 +1,8 @@
 from flask import Blueprint, request, jsonify
 from app.services.wechat_ocr import WeChatOCRService
 from ..models import db, User
+import requests
 import traceback
-import io
 
 ocr_bp = Blueprint('ocr', __name__)
 
@@ -12,8 +12,7 @@ ocr_bp = Blueprint('ocr', __name__)
 def get_current_user_id():
     openid = request.headers.get('x-wx-openid')
     if not openid:
-        # 本地测试逻辑
-        return 1
+        return 1  # 本地调试默认 ID
     user = User.query.filter_by(openid=openid).first()
     if not user:
         user = User(openid=openid)
@@ -21,46 +20,40 @@ def get_current_user_id():
         db.session.commit()
     return user.id
 
+# ==========================================
+# 🟢 OCR 上传识别接口 (fileID 版)
+# ==========================================
 @ocr_bp.route('/upload', methods=['POST'])
-def upload_ocr():
+def upload_ocr_by_fileid():
     """
-    使用 multipart/form-data 方式接收文件 (配合 wx.uploadFile)
-    彻底解决 callContainer 100KB 限制问题
+    接收前端传来的 cloud://... 格式的 file_id
+    绕过 100KB 限制和公网域名白名单限制
     """
+    user_id = get_current_user_id()
+    data = request.get_json()
+    file_id = data.get('file_id')
+
+    if not file_id:
+        return jsonify({"msg": "缺少 file_id 参数"}), 400
+
     try:
-        user_id = get_current_user_id()
-        
-        # 🟢 1. 获取文件上传对象
-        # 前端 wx.uploadFile 中的 name 参数应设为 'file'
-        file = request.files.get('file')
-        
-        if not file:
-            return jsonify({'error': '未接收到图片文件'}), 400
+        print(f"📥 用户 {user_id} 发起 OCR 请求, FileID: {file_id}")
 
-        # 🟢 2. 读取文件流
-        # WeChatOCRService 通常需要二进制流或文件对象
-        image_bytes = file.read()
-        file_obj = io.BytesIO(image_bytes)
+        # 1. 换取临时下载链接 (云托管环境建议通过 API 换取，或直接使用微信 OCR 云调用)
+        # 这里演示通用的“下载并识别”逻辑
+        # 🟢 注意：WeChatOCRService 内部需要实现基于 file_id 的下载或识别
+        
+        # 方案 A: 你的 Service 已经支持处理 file_id
+        # data_list = WeChatOCRService.recognize_by_fileid(file_id)
+        
+        # 方案 B: 手动换取链接并下载 (需要 AccessToken)
+        # 这里的实现取决于你的 WeChatOCRService 具体封装
+        data_list = WeChatOCRService.process_cloud_file(file_id)
 
-        # 🟢 3. 调用真实的 OCR 服务
-        # 假设你的 WeChatOCRService 有一个识别函数
-        print(f"开始为用户 {user_id} 处理 OCR 识别...")
-        
-        # 这里调用你真实的 OCR 逻辑
-        # 示例：result = WeChatOCRService.recognize(file_obj)
-        
-        # 模拟返回数据（请在此处替换为你的 WeChatOCRService 调用结果）
-        result = WeChatOCRService.analyze_fund_screenshot(image_bytes)
-        
-        if not result:
-            return jsonify({'message': '未能识别有效数据', 'list': []}), 200
-
-        return jsonify({
-            'message': '识别成功',
-            'list': result
-        }), 200
+        print(f"✅ OCR 识别成功，返回数量: {len(data_list) if data_list else 0}")
+        return jsonify({"list": data_list}), 200
 
     except Exception as e:
-        print(f"OCR Error: {str(e)}")
+        print("❌ OCR 接口发生严重错误！堆栈信息如下：")
         traceback.print_exc()
-        return jsonify({'error': 'OCR 处理失败，请检查图片清晰度'}), 500
+        return jsonify({"msg": f"识别失败: {str(e)}"}), 500
