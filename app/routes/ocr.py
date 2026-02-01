@@ -25,10 +25,6 @@ def get_current_user_id():
 # ==========================================
 @ocr_bp.route('/upload', methods=['POST'])
 def upload_ocr_by_fileid():
-    """
-    接收前端传来的 cloud://... 格式的 file_id
-    绕过 100KB 限制和公网域名白名单限制
-    """
     user_id = get_current_user_id()
     data = request.get_json()
     file_id = data.get('file_id')
@@ -39,21 +35,13 @@ def upload_ocr_by_fileid():
     try:
         print(f"📥 用户 {user_id} 发起 OCR 请求, FileID: {file_id}")
 
-        # 1. 换取临时下载链接 (云托管环境建议通过 API 换取，或直接使用微信 OCR 云调用)
-        # 这里演示通用的“下载并识别”逻辑
-        # 🟢 注意：WeChatOCRService 内部需要实现基于 file_id 的下载或识别
-        
-        # 方案 A: 你的 Service 已经支持处理 file_id
-        # data_list = WeChatOCRService.recognize_by_fileid(file_id)
-        
-        # 方案 B: 手动换取链接并下载 (需要 AccessToken)
-        # 这里的实现取决于你的 WeChatOCRService 具体封装
-        data_list = WeChatOCRService.process_cloud_file(file_id)
+        # 🟢 关键修正：将 process_cloud_file 改为 recognize_by_fileid
+        data_list = WeChatOCRService.recognize_by_fileid(file_id)
 
         print(f"✅ OCR 识别成功，返回数量: {len(data_list) if data_list else 0}")
         return jsonify({"list": data_list}), 200
 
     except Exception as e:
-        print("❌ OCR 接口发生严重错误！堆栈信息如下：")
+        print("❌ OCR 接口发生严重错误！")
         traceback.print_exc()
         return jsonify({"msg": f"识别失败: {str(e)}"}), 500
