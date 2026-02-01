@@ -9,7 +9,7 @@ class Config:
     # 在本地开发如果没有设置 SECRET_KEY，会使用默认值 'dev_key'
     # 上线后建议在云托管后台设置一个复杂的 SECRET_KEY
     SECRET_KEY = os.environ.get('SECRET_KEY', 'dev_key_change_this_123456')
-    
+    JWT_SECRET_KEY = os.environ.get('JWT_SECRET_KEY', 'jwt-secret-key-change-me')    
     # 关闭 SQLAlchemy 的修改追踪，节省内存
     SQLALCHEMY_TRACK_MODIFICATIONS = False
 
@@ -27,8 +27,6 @@ class Config:
         mysql_pass = os.environ.get('MYSQL_PASSWORD', 'root')
         mysql_addr = os.environ.get('MYSQL_ADDRESS', '127.0.0.1:3306')
         mysql_db   = os.environ.get('MYSQL_DATABASE', 'jijin')
-        WX_APPID = 'wx2dc3181cfeec97ca'
-        WX_SECRET = 'e9aecd7e83a30bdf92e353fe6bcf2901'
         
         # 构造 MySQL 连接字符串 (使用 pymysql 驱动)
         SQLALCHEMY_DATABASE_URI = f'mysql+pymysql://{mysql_user}:{mysql_pass}@{mysql_addr}/{mysql_db}?charset=utf8mb4'
@@ -44,13 +42,13 @@ class Config:
         # --- 本地环境 (SQLite) ---
         print("🐢 [Config] 检测到本地环境，使用 SQLite 文件")
         
-        SECRET_KEY = os.environ.get('SECRET_KEY') or 'hard-to-guess-string'
+
 
         SQLALCHEMY_DATABASE_URI = 'sqlite:///' + os.path.join(basedir, 'app.db')
         
         JWT_ACCESS_TOKEN_EXPIRES = timedelta(days=7)
         SQLALCHEMY_TRACK_MODIFICATIONS = False
-        JWT_SECRET_KEY = 'jwt-secret-key-change-me'
+
         WX_APPID = 'wx2dc3181cfeec97ca'
         WX_SECRET = 'e9aecd7e83a30bdf92e353fe6bcf2901'
         REDIS_URL = "redis://localhost:6379/0"
