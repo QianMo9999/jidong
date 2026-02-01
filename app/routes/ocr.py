@@ -1,47 +1,66 @@
 from flask import Blueprint, request, jsonify
 from app.services.wechat_ocr import WeChatOCRService
-from flask_jwt_extended import jwt_required
-import traceback # 🟢 引入堆栈追踪库
-import base64
+from ..models import db, User
+import traceback
 import io
 
 ocr_bp = Blueprint('ocr', __name__)
 
-ocr_bp = Blueprint('ocr', __name__)
+# ==========================================
+# 🛡️ 辅助函数：通过微信 Header 获取用户 ID
+# ==========================================
+def get_current_user_id():
+    openid = request.headers.get('x-wx-openid')
+    if not openid:
+        # 本地测试逻辑
+        return 1
+    user = User.query.filter_by(openid=openid).first()
+    if not user:
+        user = User(openid=openid)
+        db.session.add(user)
+        db.session.commit()
+    return user.id
 
 @ocr_bp.route('/upload', methods=['POST'])
-@jwt_required() # 如果你需要鉴权就打开
 def upload_ocr():
+    """
+    使用 multipart/form-data 方式接收文件 (配合 wx.uploadFile)
+    彻底解决 callContainer 100KB 限制问题
+    """
     try:
-        # 🟢 1. 获取 JSON 数据
-        data = request.get_json()
-        if not data or 'image_base64' not in data:
-            return jsonify({'error': 'No image data provided'}), 400
+        user_id = get_current_user_id()
+        
+        # 🟢 1. 获取文件上传对象
+        # 前端 wx.uploadFile 中的 name 参数应设为 'file'
+        file = request.files.get('file')
+        
+        if not file:
+            return jsonify({'error': '未接收到图片文件'}), 400
 
-        # 🟢 2. 解码 Base64
-        image_base64 = data['image_base64']
-        
-        # 将 base64 字符串转回二进制数据
-        image_bytes = base64.b64decode(image_base64)
-        
-        # 🟢 3. 处理图片
-        # 如果你的 OCR 服务需要文件对象，用 io.BytesIO 包装一下
-        # 它的行为就像一个打开的文件一样
+        # 🟢 2. 读取文件流
+        # WeChatOCRService 通常需要二进制流或文件对象
+        image_bytes = file.read()
         file_obj = io.BytesIO(image_bytes)
+
+        # 🟢 3. 调用真实的 OCR 服务
+        # 假设你的 WeChatOCRService 有一个识别函数
+        print(f"开始为用户 {user_id} 处理 OCR 识别...")
         
-        # === 调用你的 OCR 逻辑 ===
-        # 假设你的 OCR 函数原本接收 file 对象：
-        # result = OCRService.process(file_obj)
+        # 这里调用你真实的 OCR 逻辑
+        # 示例：result = WeChatOCRService.recognize(file_obj)
         
-        # 这里的 result 是模拟的返回数据
-        # 实际代码请替换为你真实的 OCR 调用
-        result = [
-            {"fund_code": "001234", "amount": 1000},
-            {"fund_code": "005678", "amount": 2000}
-        ]
+        # 模拟返回数据（请在此处替换为你的 WeChatOCRService 调用结果）
+        result = WeChatOCRService.analyze_fund_screenshot(image_bytes)
         
-        return jsonify({'message': 'Success', 'list': result}), 200
+        if not result:
+            return jsonify({'message': '未能识别有效数据', 'list': []}), 200
+
+        return jsonify({
+            'message': '识别成功',
+            'list': result
+        }), 200
 
     except Exception as e:
-        print(f"OCR Error: {e}")
-        return jsonify({'error': str(e)}), 500
+        print(f"OCR Error: {str(e)}")
+        traceback.print_exc()
+        return jsonify({'error': 'OCR 处理失败，请检查图片清晰度'}), 500

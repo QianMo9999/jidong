@@ -1,62 +1,64 @@
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
-from flask_jwt_extended import JWTManager
-from config import Config
-from flask import Flask
 from flask_apscheduler import APScheduler
+from config import Config
 
+# 初始化扩展
 db = SQLAlchemy()
-jwt = JWTManager()
 scheduler = APScheduler()
 
 def create_app():
     app = Flask(__name__)
     app.config.from_object(Config)
 
+    # 1. 初始化数据库
     db.init_app(app)
-    jwt.init_app(app)
 
-    # 注册蓝图
+    # 🟢 提示：由于不再使用 JWT，你可以去 config.py 里删掉 JWT_SECRET_KEY 以精简配置
+
+    # 2. 注册蓝图 (路由)
     from .routes.auth import auth_bp
     from .routes.assets import assets_bp
     from .routes.ocr import ocr_bp
+    
+    # 注意：url_prefix 保持一致，前端 request.js 会自动拼接 /api
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
     app.register_blueprint(assets_bp, url_prefix='/api/assets')
     app.register_blueprint(ocr_bp, url_prefix='/api/ocr')
-    
 
+    # 3. 同步数据库表结构
     with app.app_context():
-        # 显式推入上下文后，使用 SQL 检查
-        # 只有在表不存在时才尝试创建
         try:
             db.create_all()
-            # print("✅ 数据库表结构同步完成") # 这一行可能会在多个进程里打印，是正常的
+            # print("✅ 数据库表结构同步/检查完成")
         except Exception as e:
-            # 如果是因为表已存在导致的报错，直接忽略
-            if 'already exists' in str(e):
+            # 忽略“表已存在”错误，确保多进程启动不崩溃
+            if 'already exists' in str(e).lower():
                 pass
             else:
-                raise e
+                print(f"❌ 数据库初始化异常: {str(e)}")
+                # 在生产环境下通常不直接 raise，防止容器无限重启，但关键错误建议打印
 
-    # ==========================
-    # 🟢 配置定时任务
-    # ==========================
-    # 开启 API 支持 (可选，允许你通过 HTTP 查看任务状态)
+    # 4. 配置定时任务 (APScheduler)
+    # 开启 API 支持 (如果需要通过 /scheduler 路径查看任务，请设为 True)
     app.config['SCHEDULER_API_ENABLED'] = False
     
-    # 初始化
-    scheduler.init_app(app)
-    scheduler.start()
+    # 只有在主进程中启动 Scheduler (防止 Gunicorn 多进程下重复执行任务)
+    # 微信云托管通常单实例运行，如果后续有多实例需求，建议使用 Redis 锁
+    if not scheduler.running:
+        scheduler.init_app(app)
+        scheduler.start()
     
-    # 🟢 添加任务：每天凌晨 2:00 更新一次
-    # id: 任务唯一标识
-    # func: 目标函数的引用路径
-    # trigger: 'interval' (间隔) 或 'cron' (特定时间)
+    # 🟢 每天凌晨 2:00 执行基金数据更新任务
     @scheduler.task('cron', id='update_funds_job', hour=2, minute=0)
     def run_update_job():
-        # 注意：这里需要手动推入应用上下文，否则无法访问 current_app (虽然上面的 TaskService 没用到 db，但为了稳健最好加上)
         with app.app_context():
-            from .services.task_service import TaskService
-            TaskService.update_fund_json()
+            try:
+                from .services.task_service import TaskService
+                print("⏰ 开始执行定时任务：更新基金 JSON 数据...")
+                TaskService.update_fund_json()
+                print("✅ 定时任务执行成功")
+            except Exception as e:
+                print(f"❌ 定时任务执行失败: {str(e)}")
 
     return app
