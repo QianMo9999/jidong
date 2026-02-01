@@ -27,6 +27,8 @@ class Config:
         mysql_pass = os.environ.get('MYSQL_PASSWORD', 'root')
         mysql_addr = os.environ.get('MYSQL_ADDRESS', '127.0.0.1:3306')
         mysql_db   = os.environ.get('MYSQL_DATABASE', 'jijin')
+        WX_APPID = 'wx2dc3181cfeec97ca'
+        WX_SECRET = 'e9aecd7e83a30bdf92e353fe6bcf2901'
         
         # 构造 MySQL 连接字符串 (使用 pymysql 驱动)
         SQLALCHEMY_DATABASE_URI = f'mysql+pymysql://{mysql_user}:{mysql_pass}@{mysql_addr}/{mysql_db}?charset=utf8mb4'

@@ -1,5 +1,5 @@
 from app import create_app, db
-from app.models import User, FundAsset, FundGroup, Fund # 🟢 显式导入模型，确保建表时能识别到它们
+from app.models import User, FundAsset, FundGroup # 🟢 显式导入模型，确保建表时能识别到它们
 
 app = create_app()
 

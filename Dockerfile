@@ -10,8 +10,8 @@ RUN echo 'Asia/Shanghai' >/etc/timezone
 
 # 复制依赖文件并安装
 COPY requirements.txt .
-# 使用阿里源加速安装
-RUN pip install --no-cache-dir -r requirements.txt -i http://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com
+# 腾讯云专用源 (速度飞快)
+RUN pip install --no-cache-dir -r requirements.txt -i http://mirrors.tencentyun.com/pypi/simple --trusted-host mirrors.tencentyun.com
 # 复制项目所有代码到容器
 COPY . .
 
