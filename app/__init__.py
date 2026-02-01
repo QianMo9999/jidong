@@ -1,7 +1,7 @@
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
 from flask_jwt_extended import JWTManager
-from jidong.config import Config
+from . import Config
 from flask import Flask
 from flask_apscheduler import APScheduler
 
@@ -46,7 +46,7 @@ def create_app():
     def run_update_job():
         # 注意：这里需要手动推入应用上下文，否则无法访问 current_app (虽然上面的 TaskService 没用到 db，但为了稳健最好加上)
         with app.app_context():
-            from app.services.task_service import TaskService
+            from .services.task_service import TaskService
             TaskService.update_fund_json()
 
     return app
