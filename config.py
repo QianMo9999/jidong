@@ -9,7 +9,10 @@ class Config:
     # 在本地开发如果没有设置 SECRET_KEY，会使用默认值 'dev_key'
     # 上线后建议在云托管后台设置一个复杂的 SECRET_KEY
     SECRET_KEY = os.environ.get('SECRET_KEY', 'dev_key_change_this_123456')
-    JWT_SECRET_KEY = os.environ.get('JWT_SECRET_KEY', 'jwt-secret-key-change-me')    
+    JWT_SECRET_KEY = os.environ.get('JWT_SECRET_KEY', 'dev_key_change_this_123456') 
+    
+    WX_APPID = 'wx2dc3181cfeec97ca'
+    WX_SECRET = 'e9aecd7e83a30bdf92e353fe6bcf2901'   
     # 关闭 SQLAlchemy 的修改追踪，节省内存
     SQLALCHEMY_TRACK_MODIFICATIONS = False
 
@@ -49,6 +52,4 @@ class Config:
         JWT_ACCESS_TOKEN_EXPIRES = timedelta(days=7)
         SQLALCHEMY_TRACK_MODIFICATIONS = False
 
-        WX_APPID = 'wx2dc3181cfeec97ca'
-        WX_SECRET = 'e9aecd7e83a30bdf92e353fe6bcf2901'
         REDIS_URL = "redis://localhost:6379/0"
