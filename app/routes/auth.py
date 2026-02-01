@@ -5,25 +5,24 @@ from ..models import db, User
 
 auth_bp = Blueprint('auth', __name__)
 
-@auth_bp.route('/wx-login', methods=['POST'])
+# app/routes/auth.py
+
+@auth_bp.route('/login', methods=['POST'])
 def wx_login():
-    code = request.json.get('code')
-    appid = current_app.config['WX_APPID']
-    secret = current_app.config['WX_SECRET']
-
-    # 换取 OpenID
-    url = f"https://api.weixin.qq.com/sns/jscode2session?appid={appid}&secret={secret}&js_code={code}&grant_type=authorization_code"
-    wx_res = requests.get(url).json()
-    openid = wx_res.get('openid')
-
+    # 🟢 直接从微信网关注入的 Header 中获取 OpenID
+    openid = request.headers.get('x-wx-openid')
+    
     if not openid:
-        return jsonify({"msg": "微信登录失败"}), 400
+        # 如果是本地调试（没有网关注入），可以留一个兜底或者报错
+        return jsonify({"msg": "请在微信环境内访问"}), 401
 
+    # 1. 查找或创建用户
     user = User.query.filter_by(openid=openid).first()
     if not user:
         user = User(openid=openid)
         db.session.add(user)
         db.session.commit()
 
-    token = create_access_token(identity=str(user.id))
-    return jsonify(token=token)
+    # 2. 生成你自己的 JWT Token 返回给前端
+    access_token = create_access_token(identity=str(user.id))
+    return jsonify({"token": access_token, "msg": "登录成功"})
