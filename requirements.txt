@@ -1,10 +1,22 @@
-click==8.0.3
-Flask==2.0.2
-Flask-SQLAlchemy==2.5.1
-greenlet==1.1.2
-itsdangerous==2.0.1
-Jinja2==3.0.3
-MarkupSafe==2.0.1
-PyMySQL==1.0.2
-SQLAlchemy==1.4.29
-Werkzeug==2.0.2
+# === Web 框架核心 ===
+Flask
+Flask-SQLAlchemy
+Flask-JWT-Extended
+Flask-Cors
+
+# === 数据库与服务器 (云托管必须) ===
+pymysql
+cryptography
+gunicorn
+
+# === 爬虫与数据处理 ===
+requests
+akshare
+pandas
+lxml
+
+# === 缓存与工具 ===
+redis
+thefuzz
+python-Levenshtein
+python-dotenv

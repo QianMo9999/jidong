@@ -1,0 +1,16 @@
+page {
+  background-color: #f7f8fa; /* 浅灰护眼背景 */
+  font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Helvetica, Segoe UI, Arial, Roboto, 'PingFang SC', 'miui', 'Hiragino Sans GB', 'Microsoft Yahei', sans-serif;
+  --primary-yellow: #F8D800;
+  --gradient-yellow: linear-gradient(180deg, #FDEB71 0%, #F8D800 100%);
+  --text-main: #333333;
+  --text-gray: #999999;
+}
+
+/* 统一涨跌颜色 */
+.up { color: #ff4d4f !important; font-weight: bold; }
+.down { color: #2eb85e !important; font-weight: bold; }
+
+.container {
+  box-sizing: border-box;
+}

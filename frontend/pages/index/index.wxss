@@ -1,0 +1,175 @@
+/* --- 1. 顶部背景 & 标题 (视觉修复版) --- */
+.header-bg {
+  /* 高度稍微增加一点，容纳状态栏和更大的字，但视觉上依然保持紧凑 */
+  height: 280rpx; 
+  background: var(--gradient-yellow);
+  border-bottom-left-radius: 40rpx;
+  border-bottom-right-radius: 40rpx;
+  
+  display: flex;
+  justify-content: center;
+  /* 关键点：加大顶部内边距，避开手机刘海/状态栏，把文字推到视觉中心 */
+  padding-top: 100rpx; 
+  box-sizing: border-box;
+  z-index: 1;
+}
+
+.brand-container {
+  display: flex;
+  align-items: baseline; /* 让中文和英文底部对齐，看起来更整齐 */
+  margin-top: -50rpx; /* 微调垂直位置 */
+}
+
+.app-title-cn {
+  font-size: 48rpx; /* 加大字号：从 32 -> 48 */
+  font-weight: 800; /* 特粗体，增加品牌感 */
+  color: #1a1a1a;  
+  letter-spacing: 4rpx; 
+  margin-right: 12rpx; /* 增加中英文间距 */
+  text-shadow: 0 2rpx 4rpx rgba(0,0,0,0.05); /* 轻微浮起感 */
+}
+
+.app-title-en {
+  font-size: 30rpx; /* 加大英文：从 20 -> 30 */
+  font-weight: 500;
+  color: #333;
+  opacity: 0.85; /* 加深一点颜色，防止在黄色背景上看不清 */
+  letter-spacing: 1rpx;
+  font-family: -apple-system, sans-serif;
+}
+
+/* --- 2. 资产卡片 (配合头部调整) --- */
+.asset-card {
+  background: #fff;
+  width: 690rpx; 
+  /* 调整上移幅度：因为头部变高了，我们需要把卡片往上提更多，
+     让露出的黄色区域保持在原来那种“窄窄的”感觉 */
+  margin: -130rpx auto 20rpx; 
+  
+  padding: 36rpx 40rpx;
+  border-radius: 24rpx;
+  box-shadow: 0 8rpx 24rpx rgba(0,0,0,0.05); /* 阴影稍微加深一点点，提升立体感 */
+  box-sizing: border-box;
+  position: relative;
+  z-index: 10;
+}
+
+.card-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10rpx; /* 压缩行间距 */
+}
+
+.label { font-size: 26rpx; color: #999; }
+
+.total-amount {
+  font-size: 60rpx; /* 原来 80rpx -> 60rpx */
+  font-weight: bold;
+  font-family: 'DIN Alternate', sans-serif;
+  color: #333;
+  line-height: 1;
+  margin-bottom: 20rpx; /* 压缩下边距 */
+}
+
+.divider { 
+  height: 1rpx; 
+  background: #f5f5f5; 
+  margin-bottom: 20rpx; /* 压缩分割线间距 */
+}
+
+.daily-row { 
+  display: flex; 
+  align-items: center; 
+  justify-content: space-between; 
+}
+.gain { font-size: 32rpx; font-family: 'DIN Alternate'; font-weight: bold; }
+
+/* --- 3. 列表区 (紧凑型表格布局) --- */
+.list-container { 
+  padding: 0 0 150rpx; 
+  background: #fff; 
+  flex: 1; /* 占据剩余空间 */
+}
+
+/* 表头行 */
+.list-header {
+  display: flex;
+  align-items: center;
+  padding: 15rpx 30rpx; /* 减少高度 */
+  background: #fafafa; 
+  font-size: 22rpx; /* 字号微调 */
+  color: #999;
+  border-bottom: 1rpx solid #eee;
+}
+
+/* 列表单行 */
+.list-item {
+  display: flex;
+  align-items: center;
+  padding: 24rpx 30rpx; /* 减少单行高度 */
+  background: #fff;
+  border-bottom: 1rpx solid #f8f8f8;
+}
+
+/* 布局列控制 */
+/* 1. 左侧名称区 */
+.col-name {
+  flex: 1.1; 
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+/* 2. 右侧数据组合区 */
+.col-right-group {
+  flex: 1.9; 
+  display: flex;
+  justify-content: space-between; 
+}
+
+/* 3. 数据列通用样式 */
+.col-data {
+  flex: 1; 
+  text-align: right; 
+  font-size: 22rpx; 
+}
+
+/* 列表内容样式 */
+.fund-name { 
+  font-size: 28rpx; 
+  color: #333; 
+  font-weight: 500; 
+  margin-bottom: 4rpx;
+  white-space: nowrap; 
+  overflow: hidden; 
+  text-overflow: ellipsis;
+}
+.fund-code { font-size: 20rpx; color: #ccc; }
+
+.item-right .col-data {
+  font-size: 28rpx; /* 保持数字清晰度 */
+  font-family: 'DIN Alternate', sans-serif;
+  font-weight: 500;
+}
+
+/* 悬浮按钮 (微调位置) */
+.fab-btn {
+  position: fixed;
+  bottom: 50rpx;
+  right: 30rpx;
+  width: 100rpx;
+  height: 100rpx;
+  background: var(--primary-yellow);
+  border-radius: 50%;
+  box-shadow: 0 6rpx 16rpx rgba(248, 216, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 50rpx;
+  color: #333;
+  z-index: 100;
+}
+
+.empty-state { text-align: center; color: #ccc; margin-top: 80rpx; font-size: 26rpx; }

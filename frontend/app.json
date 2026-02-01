@@ -1,0 +1,13 @@
+{
+  "pages": [
+    "pages/index/index",
+    "pages/add-asset/add-asset"
+  ],
+  "window": {
+    "navigationBarBackgroundColor": "#fceeb5",
+    "navigationBarTitleText": "小倍培养基",
+    "navigationBarTextStyle": "black",
+    "backgroundColor": "#f8f8f8"
+  },
+  "sitemapLocation": "sitemap.json"
+}
