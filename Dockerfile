@@ -13,7 +13,7 @@ COPY requirements.txt .
 # 使用阿里源加速安装
 RUN pip install --no-cache-dir -r requirements.txt -i http://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com
 # 复制项目所有代码到容器
-COPY backend/ .
+COPY . .
 
 # 暴露 80 端口
 EXPOSE 80
