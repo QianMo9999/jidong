@@ -30,3 +30,6 @@ click
 itsdangerous
 urllib3
 certifi
+
+thefuzz
+python-Levenshtein
