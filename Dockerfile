@@ -1,6 +1,8 @@
 # 使用 Python 3.9 官方精简镜像
 FROM python:3.9-slim
 
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+
 # 设置工作目录
 WORKDIR /app
 
