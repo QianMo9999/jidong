@@ -35,10 +35,14 @@ class FundAsset(db.Model):
     __tablename__ = 'fund_assets'
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'))
-    fund_code = db.Column(db.String(10), nullable=False)
+
     fund_name = db.Column(db.String(128))
     holding_shares = db.Column(db.Float, default=0.0)
     cost_price = db.Column(db.Float, default=0.0)
+
+    fund_code = db.Column(db.String(10), index=True)  # 基金 6 位代码
+    fund_key = db.Column(db.String(50))              # 🚀 蚂蚁基金唯一 ID (e.g., '1.002207')
+
     
     # 🟢 彻底抛弃 platform，改用 group_name
     group_name = db.Column(db.String(32), default='默认账户', nullable=False) 

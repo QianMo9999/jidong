@@ -103,32 +103,35 @@ def get_realtime_quotes():
 
 @assets_bp.route('/add', methods=['POST'])
 def add_asset():
-    """添加/合并资产：支持手动和 OCR 导入"""
+    """添加/合并资产：支持手动和 OCR 导入（生产级持久化 fund_key 版）"""
     user_id = get_current_user_id()
     data = request.get_json()
     code = data.get('fund_code')
     target_group = data.get('group_name') or DEFAULT_GROUP_NAME
     
-    if not code: return jsonify({"msg": "缺少代码"}), 400
+    if not code: 
+        return jsonify({"msg": "缺少代码"}), 400
 
-    # 优先获取最新行情
-    fund_info = MarketService.get_fund_data(code)
-    # 如果接口查不到，用前端传的名字兜底（针对OCR）
+    # 1. 🚀 核心改进：从蚂蚁接口获取 fund_key 和基础行情
+    # 这里我们调用 Service 层的 fetch_fund_key_from_api
+    fund_key = MarketService.fetch_fund_key_from_api(code)
+    
+    # 2. 依然获取一次行情，用于计算份额
+    fund_info = MarketService.get_single_quote(code)
     fund_name = fund_info.get('name') if fund_info else data.get('name', f"未知基金{code}")
     current_nav = float(fund_info.get('nav', 1.0)) if fund_info else 1.0
 
-    # 计算份额
+    # 计算份额逻辑 (保持你原有的计算逻辑)
     if data.get('type') == 'history':
-        # 已有持仓录入
         cur_val = float(data.get('current_value', 0))
         profit = float(data.get('total_profit', 0))
         shares = cur_val / current_nav if current_nav > 0 else 0
         cost_total = cur_val - profit
     else:
-        # 新买入录入
         cost_total = float(data.get('investment_amount', 0))
         shares = cost_total / current_nav if current_nav > 0 else 0
 
+    # 3. 查找现有持仓
     asset = FundAsset.query.filter_by(user_id=user_id, fund_code=code, group_name=target_group).first()
     
     try:
@@ -139,19 +142,26 @@ def add_asset():
             if asset.holding_shares > 0:
                 asset.cost_price = (old_cost + cost_total) / asset.holding_shares
             asset.fund_name = fund_name
+            # 🚀 补充可能缺失的 fund_key
+            if fund_key: asset.fund_key = fund_key
         else:
             # 新建持仓
             new_asset = FundAsset(
-                user_id=user_id, fund_code=code, fund_name=fund_name,
-                holding_shares=shares, cost_price=(cost_total/shares if shares > 0 else current_nav),
+                user_id=user_id, 
+                fund_code=code, 
+                fund_key=fund_key, # 🚀 永久存储此 Key
+                fund_name=fund_name,
+                holding_shares=shares, 
+                cost_price=(cost_total/shares if shares > 0 else current_nav),
                 group_name=target_group
             )
             db.session.add(new_asset)
+        
         db.session.commit()
-        return jsonify({"msg": "保存成功"}), 201
+        return jsonify({"msg": "保存成功", "fund_key": fund_key}), 201
     except Exception as e:
         db.session.rollback()
-        return jsonify({"msg": str(e)}), 500
+        return jsonify({"msg": f"数据库写入失败: {str(e)}"}), 500
 
 @assets_bp.route('/move', methods=['POST'])
 def move_asset():
