@@ -83,33 +83,52 @@ def get_realtime_quotes():
     data = request.get_json()
     codes = data.get('codes', [])
     
-    # 拿到该用户的所有持仓，用于计算收益
     user_assets = FundAsset.query.filter_by(user_id=user_id).all()
     asset_map = {a.fund_code: a for a in user_assets}
     
+    # 🚀 MarketService 内部已实现 is_exchange_traded 分流
     raw_quotes = MarketService.batch_get_valuation(codes)
     
     formatted_quotes = {}
-    for code, q in raw_quotes.items():
+    for code in codes:
+        # 1. 拿取行情，如果该代码抓取失败，给一个空字典兜底
+        q = raw_quotes.get(code) or {}
         asset = asset_map.get(code)
-        # 基础行情
-        nav = float(q.get("nav") or 0)
-        gsz = float(q.get("gsz") or nav)
+        
+        # 2. 🚀 关键改进：多级保底提取价格
+        # 场内基金接口通常返回 gsz(当前价) 和 nav(昨收)
+        # 只要其中一个有值，就不能让另一个为 0
+        raw_nav = float(q.get("nav") or 0)
+        raw_gsz = float(q.get("gsz") or 0)
+        
+        # 如果 nav 是 0（比如新浪接口异常），尝试用 gsz 或数据库里的成本价顶替
+        nav = raw_nav if raw_nav > 0 else (raw_gsz if raw_gsz > 0 else float(asset.cost_price or 1.0))
+        # 如果 gsz 是 0（比如非交易时段），估值就等于净值
+        gsz = raw_gsz if raw_gsz > 0 else nav
+        
         pct = float(q.get("gszzl") or 0.0)
         
         res = {
             "nav": round(nav, 4),
             "gsz": round(gsz, 4),
-            "gszzl": round(pct, 2)
+            "gszzl": round(pct, 2),
+            "market_value": 0,
+            "day_profit": 0,
+            "total_profit": 0,
+            "source": q.get("source", "unknown")
         }
 
-        # 🚀 核心：如果在库里找到了持仓，后端直接把钱算好
+        # 3. 核心财务计算
         if asset:
             shares = float(asset.holding_shares or 0)
             cost = float(asset.cost_price or nav)
             
+            # 市值 = 份额 * 当前估值(或现价)
             mv = shares * gsz
+            # 当日收益 = (份额 * 昨日净值) * 当日涨跌幅
+            # 对于场内基金，这等同于 (持仓数量 * 昨收价) * 涨幅
             dp = (shares * nav) * (pct / 100)
+            # 总收益 = 当前总市值 - 总本金
             tp = mv - (shares * cost)
             
             res.update({
@@ -132,29 +151,24 @@ def add_asset():
     data = request.get_json()
     code = data.get('fund_code', '').strip()
     target_group = data.get('group_name') or "默认账户"
-    
-    if len(code) != 6: 
-        return jsonify({"msg": "请输入正确的6位基金代码"}), 400
 
-    # 1. 🚀 调用天天基金接口获取行情和名字
-    # 现在 MarketService.get_single_quote(code) 内部已经是天天基金逻辑了
+    # 🚀 使用双链路逻辑获取详情
     fund_info = MarketService.get_single_quote(code)
     
     if not fund_info:
         return jsonify({"msg": "无法获取该基金详情，请检查代码是否正确"}), 404
 
-    fund_name = fund_info.get('name', f"基金{code}")
-    # 获取到的昨日收盘净值，用于计算份额
-    current_nav = float(fund_info.get('nav', 1.0))
+    fund_name = fund_info.get('name')
+    # 这里的 nav 在场内基金代表昨收价，在场外基金代表昨日净值
+    current_nav = float(fund_info.get('nav') or 1.0)
 
     try:
         input_value = float(data.get('current_value') or 0)
         input_profit = float(data.get('total_profit') or 0)
-    except (TypeError, ValueError):
-        return jsonify({"msg": "输入金额格式错误"}), 400
+    except (ValueError, TypeError):
+        return jsonify({"msg": "金额格式错误"}), 400
 
-    # 2. 财务计算
-    # 份额 = 当前总值 / 昨日收盘单价
+    # 计算逻辑保持不变
     shares = round(input_value / current_nav, 4)
     cost_total = input_value - input_profit
     avg_cost_price = cost_total / shares if shares > 0 else current_nav
