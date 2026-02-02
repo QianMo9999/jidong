@@ -85,12 +85,17 @@ def list_assets():
 @assets_bp.route('/quotes', methods=['POST'])
 def get_realtime_quotes():
     """🟢 修复 404：首页轮询实时行情接口"""
-    data = request.get_json()
-    codes = data.get('codes', [])
-    if not codes:
-        return jsonify({})
-    # 直接透传批量行情服务的结果
-    return jsonify(MarketService.batch_get_valuation(codes))
+    try:
+        data = request.get_json()
+        codes = data.get('codes', [])
+        if not codes:
+            return jsonify({})
+
+        quotes = MarketService.batch_get_valuation(codes)
+        return jsonify(quotes)
+    except Exception as e:
+        print(f"行情刷新接口报错: {e}")
+        return jsonify({}), 500
 
 # ==========================================
 # ➕ 资产添加与移动
