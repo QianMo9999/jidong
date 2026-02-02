@@ -99,17 +99,36 @@ def list_assets():
 
 @assets_bp.route('/quotes', methods=['POST'])
 def get_realtime_quotes():
-    """🟢 修复 404：首页轮询实时行情接口"""
+    """🟢 修复：首页轮询实时行情接口，统一保留位数"""
     try:
         data = request.get_json()
         codes = data.get('codes', [])
         if not codes:
             return jsonify({})
 
-        quotes = MarketService.batch_get_valuation(codes)
-        return jsonify(quotes)
+        # 1. 获取原始行情
+        raw_quotes = MarketService.batch_get_valuation(codes)
+        
+        # 2. 🚀 关键：遍历并格式化所有数值
+        formatted_quotes = {}
+        for code, q in raw_quotes.items():
+            formatted_quotes[code] = {
+                "fund_code": q.get("fund_code", code),
+                "fund_name": q.get("fund_name"),
+                # 单价类保留 4 位
+                "nav": round(float(q.get("nav", 0)), 4) if q.get("nav") else None,
+                "gsz": round(float(q.get("gsz", 0)), 4) if q.get("gsz") else None,
+                # 涨幅保留 2 位
+                "gszzl": round(float(q.get("gszzl", 0)), 2) if q.get("gszzl") is not None else 0.0,
+                # 其它辅助字段
+                "gztime": q.get("gztime"),
+                "source": q.get("source", "api")
+            }
+
+        return jsonify(formatted_quotes)
     except Exception as e:
         print(f"行情刷新接口报错: {e}")
+        traceback.print_exc() # 建议加上堆栈打印方便定位
         return jsonify({}), 500
 
 # ==========================================
