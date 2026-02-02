@@ -167,3 +167,15 @@ class MarketService:
                 if res: results[res[0]] = res[1]
 
         return results
+    
+    @classmethod
+    def get_single_quote(cls, code):
+        """
+        🚀 供外部路由调用的单只基金抓取入口
+        """
+        cls._refresh_context()  # 确保令牌有效
+        f_key = cls.fetch_fund_key_from_api(code)
+            
+        # 核心：根据 key 获取行情
+        result = cls.get_quote_by_key(code, f_key)
+        return result[1] if result else None
