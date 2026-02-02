@@ -145,6 +145,8 @@ class MarketService:
 
     @classmethod
     def batch_get_valuation(cls, fund_items):
+        if fund_items and isinstance(fund_items[0], str):
+            fund_items = [{'code': c, 'key': None} for c in fund_items]
         """🚀 生产级入口"""
         if not fund_items: return {}
         cls._refresh_context()

@@ -43,8 +43,12 @@ def list_assets():
     assets = FundAsset.query.filter_by(user_id=user_id).all()
     
     # 批量抓取行情
-    codes = [a.fund_code for a in assets]
-    quotes = MarketService.batch_get_valuation(codes) if codes else {}
+    # codes = [a.fund_code for a in assets]
+    fund_items = [
+        {'code': asset.fund_code, 'key': asset.fund_key} 
+        for asset in assets
+    ]
+    quotes = MarketService.batch_get_valuation(fund_items) if codes else {}
     
     total_val = 0
     day_profit = 0
