@@ -41,60 +41,40 @@ def list_assets():
     user_id = get_current_user_id()
     user_assets = FundAsset.query.filter_by(user_id=user_id).all()
     
-    # 1. 构造请求项
-    fund_items = [{'code': a.fund_code, 'key': a.fund_key} for a in user_assets]
-    
-    # 2. 获取实时行情
-    quotes = MarketService.batch_get_valuation(fund_items) if fund_items else {}
+    # 1. 现在只需传入 code 列表
+    codes = [a.fund_code for a in user_assets]
+    quotes = MarketService.batch_get_valuation(codes) if codes else {}
     
     results = []
-    needs_commit = False # 标记是否需要回写数据库
-
     for asset in user_assets:
-        quote = quotes.get(asset.fund_code)
+        quote = quotes.get(asset.fund_code) or {} # 🚀 保证 quote 不为 None
         
-        # 1. 基础数据准备
         shares = float(asset.holding_shares or 0)
-        db_cost = float(asset.cost_price or 0)
+        db_cost = float(asset.cost_price or 1.0)
         
-        # 2. 确定“昨日参考价” (yest_nav)
-        yest_nav = float(quote.get('nav', db_cost)) if quote else db_cost
-        
-        # 3. 确定“当前估值价” (curr_gsz) 和 “当日涨幅” (gszzl)
-        curr_gsz = float(quote.get('gsz', yest_nav)) if quote else yest_nav
-        gszzl = float(quote.get('gszzl', 0.0)) if quote else 0.0
+        # 🚀 优先级：接口净值 > 接口估值 > 数据库成本价
+        yest_nav = float(quote.get('nav') or quote.get('gsz') or db_cost)
+        curr_gsz = float(quote.get('gsz') or yest_nav)
+        gszzl = float(quote.get('gszzl') or 0.0)
 
-        # 4. 财务核心计算
         mv = shares * curr_gsz
         dp = (shares * yest_nav) * (gszzl / 100)
-        tp = mv - (shares * db_cost) if db_cost > 0 else 0
+        tp = mv - (shares * db_cost)
 
-        # 5. 组装返回给前端的数据 (严格控制小数位数)
         results.append({
             "id": asset.id,
             "fund_code": asset.fund_code,
             "fund_name": asset.fund_name,
             "group_name": asset.group_name or '默认账户',
-            "holding_shares": shares,
-            # 🚀 单价类保留 4 位小数
-            "nav": round(yest_nav, 4),          
-            "gsz": round(curr_gsz, 4),          
-            # 🚀 涨幅与金额类保留 2 位小数
-            "daily_pct": round(gszzl, 2),       
-            "market_value": round(mv, 2),  
+            "holding_shares": round(shares, 4),
+            "nav": round(yest_nav, 4),
+            "gsz": round(curr_gsz, 4),
+            "daily_pct": round(gszzl, 2), 
+            "market_value": round(mv, 2),
             "day_profit": round(dp, 2),
-            "total_profit": round(tp, 2),
-            "source": quote.get('source', 'cache') if quote else 'db'
+            "total_profit": round(tp, 2)
         })
 
-    # 如果补全了 key，执行一次提交，下次刷新就直接飞快了
-    if needs_commit:
-        try:
-            db.session.commit()
-        except:
-            db.session.rollback()
-
-    # 🚀 包装在 funds 对象中返回，匹配前端 res.funds
     return jsonify({"funds": results})
 
 @assets_bp.route('/quotes', methods=['POST'])
@@ -148,7 +128,6 @@ def get_realtime_quotes():
 
 @assets_bp.route('/add', methods=['POST'])
 def add_asset():
-    """统一资产添加：接收代码和金额，后端自动查询名字并计算份额"""
     user_id = get_current_user_id()
     data = request.get_json()
     code = data.get('fund_code', '').strip()
@@ -157,72 +136,58 @@ def add_asset():
     if len(code) != 6: 
         return jsonify({"msg": "请输入正确的6位基金代码"}), 400
 
-    # 1. 🚀 在保存前，通过接口获取该基金的“全家桶”信息
-    # 包含：名字(name)、昨日净值(nav)、唯一标识(fund_key)
+    # 1. 🚀 调用天天基金接口获取行情和名字
+    # 现在 MarketService.get_single_quote(code) 内部已经是天天基金逻辑了
     fund_info = MarketService.get_single_quote(code)
+    
     if not fund_info:
         return jsonify({"msg": "无法获取该基金详情，请检查代码是否正确"}), 404
 
     fund_name = fund_info.get('name', f"基金{code}")
-    fund_key = fund_info.get('fund_key')
     # 获取到的昨日收盘净值，用于计算份额
     current_nav = float(fund_info.get('nav', 1.0))
 
-    # 2. 获取并转换用户输入的数值
     try:
-        # 统一取值：current_value 是用户看到的总资产，total_profit 是累计赚的钱
         input_value = float(data.get('current_value') or 0)
         input_profit = float(data.get('total_profit') or 0)
     except (TypeError, ValueError):
         return jsonify({"msg": "输入金额格式错误"}), 400
 
-    if input_value <= 0:
-        return jsonify({"msg": "持有金额必须大于0"}), 400
-
-    # 3. 财务核心计算
-    # 份额 = 当前总值 / 此时的收盘单价
+    # 2. 财务计算
+    # 份额 = 当前总值 / 昨日收盘单价
     shares = round(input_value / current_nav, 4)
-    # 投入本金 = 当前总值 - 累计收益
     cost_total = input_value - input_profit
-    # 算出一个初始的平均成本单价
     avg_cost_price = cost_total / shares if shares > 0 else current_nav
 
-    # 4. 查找现有持仓（合并逻辑）或新建
+    # 3. 合并或新建逻辑
     asset = FundAsset.query.filter_by(user_id=user_id, fund_code=code, group_name=target_group).first()
     
     try:
         if asset:
-            # 🔄 合并持仓：累加本金和份额，重新加权平均单价
             old_shares = float(asset.holding_shares or 0)
             old_cost_price = float(asset.cost_price or current_nav)
-            
             new_total_shares = old_shares + shares
             if new_total_shares > 0:
-                # (旧总本金 + 新总本金) / 总份额
                 asset.cost_price = (old_shares * old_cost_price + cost_total) / new_total_shares
                 asset.holding_shares = new_total_shares
-            
-            asset.fund_name = fund_name # 顺便更新一下名字
-            if fund_key: asset.fund_key = fund_key
+            asset.fund_name = fund_name
         else:
-            # ✨ 新建持仓
             new_asset = FundAsset(
                 user_id=user_id, 
                 fund_code=code, 
-                fund_key=fund_key,
                 fund_name=fund_name,
                 holding_shares=shares, 
                 cost_price=avg_cost_price,
-                group_name=target_group
+                group_name=target_group,
+                fund_key=None # 🚀 彻底弃用这个字段
             )
             db.session.add(new_asset)
         
         db.session.commit()
         return jsonify({"msg": f"【{fund_name}】保存成功", "shares": shares}), 201
-
     except Exception as e:
         db.session.rollback()
-        return jsonify({"msg": f"数据库写入失败: {str(e)}"}), 500
+        return jsonify({"msg": f"保存失败: {str(e)}"}), 500
 
 @assets_bp.route('/move', methods=['POST'])
 def move_asset():

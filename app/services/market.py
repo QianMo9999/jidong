@@ -19,163 +19,90 @@ class MarketService:
         "Accept": "application/json"
     }
 
-    # 内存缓存存根
-    _CONTEXT = {
-        "session": requests.Session(),
-        "csrf": None,
-        "last_init": 0,
-        "key_cache": {} 
-    }
-
     @classmethod
-    def _refresh_context(cls):
-        """🛡️ 自动维护 CSRF 令牌（每 20 分钟刷新）"""
-        now = time.time()
-        if cls._CONTEXT["csrf"] and (now - cls._CONTEXT["last_init"] < 1200):
-            return
-
+    def get_fund_quote(cls, code):
+        """
+        🚀 核心：天天基金实时行情（无需 Token，全时段可用）
+        """
         try:
-            logger.info("🔄 正在刷新蚂蚁基金 API 上下文...")
-            res = cls._CONTEXT["session"].get(
-                "https://www.fund123.cn/fund", 
-                headers=cls._HEADERS, 
-                timeout=10, 
-                verify=False
-            )
-            csrf_match = re.findall(r'\"csrf\":\"(.*?)\"', res.text)
-            if csrf_match:
-                cls._CONTEXT["csrf"] = csrf_match[0]
-                cls._CONTEXT["last_init"] = now
-                cls._CONTEXT["session"].headers.update({"_csrf": cls._CONTEXT["csrf"]})
-                logger.info(f"✅ 上下文初始化成功, CSRF: {cls._CONTEXT['csrf'][:8]}...")
-            else:
-                logger.error("❌ 无法解析 CSRF 令牌")
-        except Exception as e:
-            logger.error(f"⚠️ 初始化蚂蚁接口失败: {str(e)}")
-
-    @classmethod
-    def fetch_fund_key_from_api(cls, code):
-        """🚀 供 Route 调用：添加基金时同步获取 key"""
-        cls._refresh_context()
-        if code in cls._CONTEXT["key_cache"]:
-            return cls._CONTEXT["key_cache"][code]
-        return cls._fetch_fund_key(code)
-
-    @classmethod
-    def _fetch_fund_key(cls, code):
-        """🛡️ 内部方法：从搜索接口换取 fund_key"""
-        try:
-            search_url = f"https://www.fund123.cn/api/fund/searchFund"
-            data = {"fundCode": code}
-            resp = cls._CONTEXT["session"].post(
-                search_url, 
-                params={"_csrf": cls._CONTEXT["csrf"]}, 
-                json=data, 
-                headers=cls._HEADERS, 
-                timeout=5
-            )
-            res = resp.json()
-            if res.get("success") and res.get("fundInfo"):
-                f_key = res["fundInfo"]["key"]
-                cls._CONTEXT["key_cache"][code] = f_key
-                return f_key
-        except Exception as e:
-            logger.warning(f"无法获取代码 {code} 的 FundKey: {e}")
-        return None
-
-    @classmethod
-    def get_quote_by_key(cls, code, f_key):
-        """🚀 核心：尝试蚂蚁接口行情，失败则兜底"""
-        try:
-            url = "https://www.fund123.cn/api/fund/queryFundEstimateIntraday"
-            today = datetime.now().strftime("%Y-%m-%d")
-            tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+            # 使用毫秒级时间戳防止缓存
+            ts = int(time.time() * 1000)
+            url = f"http://fundgz.1234567.com.cn/js/{code}.js?rt={ts}"
             
-            payload = {
-                "startTime": today, "endTime": tomorrow,
-                "limit": 1, "productId": f_key,
-                "format": True, "source": "WEALTHBFFWEB"
-            }
-            
-            resp = cls._CONTEXT["session"].post(
-                url, 
-                params={"_csrf": cls._CONTEXT["csrf"]}, 
-                json=payload, 
-                timeout=3
-            )
-            res_json = resp.json()
-
-            if res_json.get("success") and res_json.get("list"):
-                latest = res_json["list"][-1]
-                return code, {
-                    "code": code,
-                    "name": latest.get('fundName'),
-                    "nav": float(latest.get('netValue', 0.0)),
-                    "gsz": float(latest.get('forecastNetValue', 0.0)),
-                    "gszzl": float(latest.get('forecastGrowth', 0.0)) * 100,
-                    "gztime": datetime.fromtimestamp(latest['time'] / 1000).strftime("%H:%M:%S"),
-                    "fund_key": f_key, # 传回 key，方便数据库补录
-                    "source": "ant"
-                }
-        except Exception as e:
-            logger.warning(f"⚠️ 蚂蚁接口对 {code} 失效，切换兜底: {e}")
-
-        return cls.fallback_to_tiantian(code)
-
-    @classmethod
-    def fallback_to_tiantian(cls, code):
-        """🛡️ 天天基金兜底（无需 Token，万能备胎）"""
-        try:
-            url = f"http://fundgz.1234567.com.cn/js/{code}.js?rt={int(time.time())}"
-            resp = requests.get(url, timeout=3)
+            resp = requests.get(url, headers=cls._HEADERS, timeout=5)
+            # 解析 jsonpgz(...) 格式
             match = re.search(r'jsonpgz\((.*)\);', resp.text)
-            if match:
-                data = json.loads(match.group(1))
-                return code, {
-                    "code": code,
-                    "name": data.get('name'),
-                    "nav": float(data.get('dwjz', 1.0)),
-                    "gsz": float(data.get('gsz', 1.0)),
-                    "gszzl": float(data.get('gszzl', 0.0)),
-                    "gztime": data.get('gztime'),
-                    "source": "tiantian_fallback"
-                }
-        except: pass
-        return code, None
+            
+            if not match:
+                logger.warning(f"无法解析基金代码或代码不存在: {code}")
+                return code, None
+
+            # 这里的 json.loads 必须配对正确
+            data = json.loads(match.group(1))
+            
+            # 🚀 关键修复点：先提取原始值，再安全转换
+            # dwjz: 昨日单位净值 | gsz: 当前估值净值 | gszzl: 估值涨幅
+            raw_nav = data.get('dwjz')
+            raw_gsz = data.get('gsz')
+            raw_pct = data.get('gszzl')
+
+            # 转换为 float，如果不存在则使用 1.0 或 0.0 保底
+            nav = float(raw_nav) if raw_nav else 1.0
+            gsz = float(raw_gsz) if raw_gsz else nav # 非交易时间估值通常等于净值
+            pct = float(raw_pct) if raw_pct else 0.0
+
+            return code, {
+                "code": code,
+                "name": data.get('name'),
+                "nav": round(nav, 4),
+                "gsz": round(gsz, 4),
+                "gszzl": round(pct, 2),
+                "gztime": data.get('gztime', '--:--'),
+                "source": "tiantian"
+            }
+        except Exception as e:
+            logger.error(f"⚠️ 天天基金接口异常 {code}: {str(e)}")
+            return code, None
 
     @classmethod
     def batch_get_valuation(cls, fund_items):
+        """
+        🚀 批量获取入口：支持多线程并发
+        """
+        # 兼容处理：如果是代码字符串列表，转为字典格式
         if fund_items and isinstance(fund_items[0], str):
-            fund_items = [{'code': c, 'key': None} for c in fund_items]
-        """🚀 生产级入口"""
-        if not fund_items: return {}
-        cls._refresh_context()
+            fund_items = [{'code': c} for c in fund_items]
+        
+        if not fund_items:
+            return {}
+
         results = {}
 
         def _worker(item):
-            code = item['code']
-            f_key = item.get('key')
-            if not f_key:
-                f_key = cls._fetch_fund_key(code)
-            if not f_key:
-                return cls.fallback_to_tiantian(code)
-            return cls.get_quote_by_key(code, f_key)
+            code = item.get('code')
+            if not code: return None
+            return cls.get_fund_quote(code)
 
+        # 默认使用 5 个线程，避免频繁请求被封 IP
         with ThreadPoolExecutor(max_workers=5) as executor:
             responses = list(executor.map(_worker, fund_items))
             for res in responses:
-                if res: results[res[0]] = res[1]
+                # 只有当抓取成功且数据体不为 None 时才存入
+                if res and res[1]:
+                    results[res[0]] = res[1]
+                elif res:
+                    # 彻底失败时，返回一个基础结构防止后端业务逻辑报错
+                    results[res[0]] = {
+                        "code": res[0], "nav": 0.0, "gsz": 0.0, "gszzl": 0.0,
+                        "source": "error_fallback"
+                    }
 
         return results
-    
+
     @classmethod
     def get_single_quote(cls, code):
         """
-        🚀 供外部路由调用的单只基金抓取入口
+        🚀 单只基金抓取入口
         """
-        cls._refresh_context()  # 确保令牌有效
-        f_key = cls.fetch_fund_key_from_api(code)
-            
-        # 核心：根据 key 获取行情
-        result = cls.get_quote_by_key(code, f_key)
-        return result[1] if result else None
+        res = cls.get_fund_quote(code)
+        return res[1] if res else None
