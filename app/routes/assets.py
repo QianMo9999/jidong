@@ -58,38 +58,30 @@ def list_assets():
         db_cost = float(asset.cost_price or 0)
         
         # 2. 确定“昨日参考价” (yest_nav)
-        # 优先使用接口返回的昨日收盘净值(nav)；如果接口没给（如收盘或断网），回退到数据库存的成本价
-        # 这样新导入的基金也会显示准确的当日盈亏基数
         yest_nav = float(quote.get('nav', db_cost)) if quote else db_cost
         
         # 3. 确定“当前估值价” (curr_gsz) 和 “当日涨幅” (gszzl)
-        # 优先用接口实时估值(gsz)，如果没开盘或没数据，用昨日参考价
         curr_gsz = float(quote.get('gsz', yest_nav)) if quote else yest_nav
         gszzl = float(quote.get('gszzl', 0.0)) if quote else 0.0
 
         # 4. 财务核心计算
-        # 【市值】：基于当前最新可用的单价
         mv = shares * curr_gsz
-        
-        # 【当日盈亏】：必须基于“昨日净值”计算
-        # 公式：当日盈亏 = 份额 * 昨日净值 * (涨幅 / 100)
         dp = (shares * yest_nav) * (gszzl / 100)
-        
-        # 【总盈亏】：当前总价值 - 投入的总本金
-        # 只有当 db_cost > 0 时才计算，否则默认为 0，防止逻辑错误
         tp = mv - (shares * db_cost) if db_cost > 0 else 0
 
-        # 5. 组装返回给前端的数据 (严格对应小程序 index.js 的字段需求)
+        # 5. 组装返回给前端的数据 (严格控制小数位数)
         results.append({
             "id": asset.id,
             "fund_code": asset.fund_code,
             "fund_name": asset.fund_name,
             "group_name": asset.group_name or '默认账户',
             "holding_shares": shares,
-            "nav": yest_nav,          # 对应前端展示：昨日收盘
-            "gsz": curr_gsz,          # 对应前端展示：当前估算
-            "daily_pct": gszzl,       # 对应前端展示：当日涨幅
-            "market_value": round(mv, 2),  # 解决计算 NaN 和小数点问题
+            # 🚀 单价类保留 4 位小数
+            "nav": round(yest_nav, 4),          
+            "gsz": round(curr_gsz, 4),          
+            # 🚀 涨幅与金额类保留 2 位小数
+            "daily_pct": round(gszzl, 2),       
+            "market_value": round(mv, 2),  
             "day_profit": round(dp, 2),
             "total_profit": round(tp, 2),
             "source": quote.get('source', 'cache') if quote else 'db'
