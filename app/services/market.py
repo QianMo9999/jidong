@@ -33,55 +33,85 @@ class MarketService:
             print(f"⚠️ Redis Context 保护触发: {e}")
             return None
 
+    import akshare as ak
+import pandas as pd
+
+class MarketService:
     @classmethod
     def batch_get_valuation(cls, codes):
         """
-        🚀 使用 AkShare 获取基金实时估算数据 (替代天天基金接口)
-        说明: 此接口返回的是交易时间内的实时估算数据，非交易时间可能无数据。
+        🚀 核心优化：自动识别场内/场外基金并调用对应 AkShare 接口
         """
         if not codes:
             return {}
 
         results = {}
-        
-        # 1. 调用 AkShare 实时估值接口
-        # 注意: 该接口可能返回大量数据，我们根据codes进行过滤
-        try:
-            # 获取所有有估值数据的基金列表
-            estimation_df = ak.fund_em_value_estimation()
-            
-            # 将接口返回的DataFrame的索引（基金代码）转为字符串，便于匹配
-            estimation_df.index = estimation_df.index.map(str)
-            
-            # 根据传入的codes列表进行筛选
-            for code in codes:
-                clean_code = str(code).strip()
-                if clean_code in estimation_df.index:
-                    fund_data = estimation_df.loc[clean_code]
-                    
-                    # 提取关键字段，注意字段名可能随AkShare版本变化，请根据实际情况调整
-                    # ‘估算净值’， ‘估算涨跌幅’
-                    results[clean_code] = {
-                        "code": clean_code,
-                        "name": fund_data.get('名称', 'N/A'),
-                        "nav": fund_data.get('估算净值', 0.0),  # 当前估算净值
-                        "gszzl": fund_data.get('估算涨跌幅', 0.0),  # 估算涨幅（百分比）
-                        "gztime": fund_data.get('估值时间', ''),
-                        # 以下为原接口可能没有的补充信息
-                        "last_nav": fund_data.get('最新净值', 0.0),  # 前一交易日官方净值
-                        "nav_date": fund_data.get('净值日期', ''),
-                    }
-                else:
-                    # 如果code不在估值列表中，可以记录或尝试其他接口
-                    results[clean_code] = {
-                        "code": clean_code,
-                        "error": "未找到该基金的实时估值数据"
-                    }
-                    
-        except Exception as e:
-            print(f"❌ 通过 AkShare 获取估值数据异常: {e}")
-            # 可以选择在这里降级，尝试使用你的原接口或其他备用接口
-            return {"error": f"数据获取失败: {str(e)}"}
+        etf_codes = []      # 场内基金 (ETF/LOF)
+        regular_codes = []  # 场外基金 (普通开放式)
+
+        # ==========================================
+        # 🛡️ 1. 自动判断逻辑 (加固版)
+        # ==========================================
+        for code in codes:
+            c = str(code).strip()
+            # 沪市场内：50, 51, 52, 56, 58 开头
+            # 深市场内：15, 16, 18 开头
+            if c.startswith(('50', '51', '52', '56', '58', '15', '16', '18')):
+                etf_codes.append(c)
+            else:
+                regular_codes.append(c)
+
+        # ==========================================
+        # 🟢 2. 获取场外基金实时估值 (fund_value_estimation_em)
+        # ==========================================
+        if regular_codes:
+            try:
+                # 注意：此接口返回的是全量数据，建议不要太频繁调用
+                est_df = ak.fund_value_estimation_em()
+                est_df['基金代码'] = est_df['基金代码'].astype(str)
+                est_df.set_index('基金代码', inplace=True)
+
+                for code in regular_codes:
+                    if code in est_df.index:
+                        row = est_df.loc[code]
+                        results[code] = {
+                            "code": code,
+                            "name": row.get('基金简称', 'N/A'),
+                            "nav": float(row.get('估算净值', 0.0)),
+                            "gszzl": float(row.get('估算涨跌幅', 0.0)),
+                            "gztime": row.get('估值时间', ''),
+                            "type": "场外"
+                        }
+                    else:
+                        results[code] = {"code": code, "error": "未找到估值", "type": "场外"}
+            except Exception as e:
+                print(f"❌ 场外获取失败: {e}")
+
+        # ==========================================
+        # 🔵 3. 获取场内基金实时行情 (fund_etf_spot_em)
+        # ==========================================
+        if etf_codes:
+            try:
+                # 获取场内 ETF/LOF 实时快照
+                spot_df = ak.fund_etf_spot_em()
+                spot_df['代码'] = spot_df['代码'].astype(str)
+                spot_df.set_index('代码', inplace=True)
+
+                for code in etf_codes:
+                    if code in spot_df.index:
+                        row = spot_df.loc[code]
+                        results[code] = {
+                            "code": code,
+                            "name": row.get('名称', 'N/A'),
+                            "nav": float(row.get('最新价', 0.0)),  # 场内交易看最新成交价
+                            "gszzl": float(row.get('涨跌幅', 0.0)), # 场内实时涨跌
+                            "gztime": row.get('数据复核时间', ''), # 对应交易时间
+                            "type": "场内"
+                        }
+                    else:
+                        results[code] = {"code": code, "error": "未找到行情", "type": "场内"}
+            except Exception as e:
+                print(f"❌ 场内获取失败: {e}")
 
         return results
 
