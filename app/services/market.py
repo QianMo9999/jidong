@@ -34,62 +34,63 @@ class MarketService:
     def batch_get_valuation(cls, codes):
         """
         🚀 核心优化：使用天天基金专用批量实时估值接口
-        接口地址格式: http://fundgz.1234567.com.cn/js/list/{codes}.js
         """
         if not codes:
+            return {}
+
+        # 🟢 补全缺失的定义：清洗代码列表，去除空格和非字符串干扰
+        clean_codes = [str(c).strip() for c in codes if c]
+        if not clean_codes:
             return {}
 
         results = {}
         r = cls.get_redis()
         
-        # 1. 优先尝试从 Redis 批量读取缓存 (mget)
+        # 1. 优先尝试从 Redis 批量读取缓存
         remaining_codes = []
         if r:
             try:
-                keys = [f"fund_nav:{c}" for c in codes]
+                keys = [f"fund_nav:{c}" for c in clean_codes]
                 cached_values = r.mget(keys)
                 for i, val in enumerate(cached_values):
+                    current_code = clean_codes[i]
                     if val:
                         data = json.loads(val)
-                        results[codes[i]] = {
-                            "code": codes[i],
+                        results[current_code] = {
+                            "code": current_code,
                             "name": data.get('name'),
                             "nav": data.get('nav'),
                             "gszzl": data.get('daily_pct'),
                             "gztime": data.get('update_time')
                         }
                     else:
-                        remaining_codes.append(codes[i])
-            except:
-                remaining_codes = codes
+                        remaining_codes.append(current_code)
+            except Exception as e:
+                print(f"⚠️ Redis 读取异常: {e}")
+                remaining_codes = clean_codes
         else:
-            remaining_codes = codes
+            remaining_codes = clean_codes
 
-        # 如果缓存全命中，直接返回
         if not remaining_codes:
             return results
 
         # 2. 调用天天基金批量极速接口
         try:
-            # 将代码列表拼成 000001,000002 格式
-            code_str = ",".join(clean_codes)
+            # 现在 clean_codes 和 remaining_codes 都有定义了
+            code_str = ",".join(remaining_codes)
             timestamp = int(time.time() * 1000)
-            # 天天基金批量接口地址
             url = f"http://fundgz.1234567.com.cn/js/list/{code_str}.js?rt={timestamp}"
             
-            # 🟢 关键：必须伪装得像浏览器，否则会被返回空或 403
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "Referer": "http://fund.eastmoney.com/",
                 "Accept": "*/*"
             }
             
-            print(f"📡 正在爬取行情: {url}") # 调试用：去云托管日志看这个 URL 点开有没有数据
+            print(f"📡 正在爬取行情: {url}")
             
-            # 使用 verify=False 绕过你之前遇到的 SSL 证书问题
-            resp = requests.get(url, headers=headers, timeout=5, verify=False)
+            resp = requests.get(url, headers=headers, timeout=8, verify=False)
             
-            # 接口返回格式示例: jsonpgz({"000001":{...},"000002":{...}});
             match = re.search(r'jsonpgz\((.*)\);', resp.text)
             if match:
                 raw_json = json.loads(match.group(1))
@@ -103,7 +104,6 @@ class MarketService:
                     }
                     results[code] = val_data
                     
-                    # 异步写入缓存（如果不报错的话）
                     if r:
                         try:
                             cache_item = {
@@ -114,6 +114,10 @@ class MarketService:
                             }
                             r.setex(f"fund_nav:{code}", 600, json.dumps(cache_item))
                         except: pass
+                print(f"✅ 成功抓取 {len(raw_json)} 只基金数据")
+            else:
+                print(f"⚠️ 接口返回格式不符: {resp.text[:100]}")
+
         except Exception as e:
             print(f"❌ 批量抓取行情异常: {e}")
 
