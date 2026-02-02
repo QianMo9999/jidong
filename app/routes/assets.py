@@ -53,41 +53,45 @@ def list_assets():
     for asset in user_assets:
         quote = quotes.get(asset.fund_code)
         
-        # 🚀 关键改进：如果接口拿到了数据，就用接口的；否则“锁死”数据库原有的值，不准变1
-        display_nav = asset.cost_price # 默认用资产表里的成本价或上次记录的价格
-        gszzl = 0.0
-        
-        if quote:
-            display_nav = quote.get('gsz', display_nav) # 优先用最新估算净值
-            gszzl = quote.get('gszzl', 0.0)
-            
-            # 🚀 自动修复数据库：如果库里没 key，这次抓到了就补上
-            if not asset.fund_key and quote.get('fund_key'):
-                asset.fund_key = quote['fund_key']
-                needs_commit = True
-        
-        # 组装返回给前端的数据
-        # 在循环内部先计算出前端需要的原始数值
+        # 1. 基础数据准备
         shares = float(asset.holding_shares or 0)
-        # 市值 = 份额 * 当前净值
-        market_value = shares * float(display_nav)
-        # 总盈亏 = 当前市值 - (份额 * 买入成本价)
-        total_profit = market_value - (shares * float(asset.cost_price or display_nav))
-        # 当日盈亏（简易算法） = 昨日市值 * 当日涨幅
-        day_profit = (shares * float(asset.cost_price or display_nav)) * (gszzl / 100)
+        db_cost = float(asset.cost_price or 0)
+        
+        # 2. 确定“昨日参考价” (yest_nav)
+        # 优先使用接口返回的昨日收盘净值(nav)；如果接口没给（如收盘或断网），回退到数据库存的成本价
+        # 这样新导入的基金也会显示准确的当日盈亏基数
+        yest_nav = float(quote.get('nav', db_cost)) if quote else db_cost
+        
+        # 3. 确定“当前估值价” (curr_gsz) 和 “当日涨幅” (gszzl)
+        # 优先用接口实时估值(gsz)，如果没开盘或没数据，用昨日参考价
+        curr_gsz = float(quote.get('gsz', yest_nav)) if quote else yest_nav
+        gszzl = float(quote.get('gszzl', 0.0)) if quote else 0.0
 
+        # 4. 财务核心计算
+        # 【市值】：基于当前最新可用的单价
+        mv = shares * curr_gsz
+        
+        # 【当日盈亏】：必须基于“昨日净值”计算
+        # 公式：当日盈亏 = 份额 * 昨日净值 * (涨幅 / 100)
+        dp = (shares * yest_nav) * (gszzl / 100)
+        
+        # 【总盈亏】：当前总价值 - 投入的总本金
+        # 只有当 db_cost > 0 时才计算，否则默认为 0，防止逻辑错误
+        tp = mv - (shares * db_cost) if db_cost > 0 else 0
+
+        # 5. 组装返回给前端的数据 (严格对应小程序 index.js 的字段需求)
         results.append({
             "id": asset.id,
             "fund_code": asset.fund_code,
             "fund_name": asset.fund_name,
             "group_name": asset.group_name or '默认账户',
             "holding_shares": shares,
-            "nav": asset.cost_price or display_nav, # 对应前端 item.nav
-            "gsz": display_nav,
-            "daily_pct": gszzl, # 对应前端 item.daily_pct
-            "market_value": market_value, # 👈 必须提供，解决变 NaN 问题
-            "day_profit": day_profit,     # 👈 必须提供
-            "total_profit": total_profit, # 👈 必须提供
+            "nav": yest_nav,          # 对应前端展示：昨日收盘
+            "gsz": curr_gsz,          # 对应前端展示：当前估算
+            "daily_pct": gszzl,       # 对应前端展示：当日涨幅
+            "market_value": round(mv, 2),  # 解决计算 NaN 和小数点问题
+            "day_profit": round(dp, 2),
+            "total_profit": round(tp, 2),
             "source": quote.get('source', 'cache') if quote else 'db'
         })
 
@@ -122,62 +126,66 @@ def get_realtime_quotes():
 
 @assets_bp.route('/add', methods=['POST'])
 def add_asset():
-    """添加/合并资产：支持手动和 OCR 导入（生产级持久化 fund_key 版）"""
+    """统一资产添加逻辑：不论来源，一律按 NAV 折算份额并持久化"""
     user_id = get_current_user_id()
     data = request.get_json()
     code = data.get('fund_code')
-    target_group = data.get('group_name') or DEFAULT_GROUP_NAME
+    target_group = data.get('group_name') or "默认账户"
     
     if not code: 
         return jsonify({"msg": "缺少代码"}), 400
 
-    # 1. 🚀 核心改进：从蚂蚁接口获取 fund_key 和基础行情
-    # 这里我们调用 Service 层的 fetch_fund_key_from_api
-    fund_key = MarketService.fetch_fund_key_from_api(code)
-    
-    # 2. 依然获取一次行情，用于计算份额
+    # 1. 获取接口确定的最新 NAV
     fund_info = MarketService.get_single_quote(code)
-    fund_name = fund_info.get('name') if fund_info else data.get('name', f"未知基金{code}")
-    current_nav = float(fund_info.get('nav', 1.0)) if fund_info else 1.0
+    if not fund_info:
+        return jsonify({"msg": "获取行情失败"}), 500
 
-    # 计算份额逻辑 (保持你原有的计算逻辑)
-    if data.get('type') == 'history':
-        cur_val = float(data.get('current_value', 0))
-        profit = float(data.get('total_profit', 0))
-        shares = cur_val / current_nav if current_nav > 0 else 0
-        cost_total = cur_val - profit
-    else:
-        cost_total = float(data.get('investment_amount', 0))
-        shares = cost_total / current_nav if current_nav > 0 else 0
+    # 核心字段提取
+    fund_key = fund_info.get('fund_key')
+    fund_name = fund_info.get('name') or data.get('name', f"基金{code}")
+    current_nav = float(fund_info.get('nav', 1.0)) # 自动更新的最新收盘净值
 
-    # 3. 查找现有持仓
+    # 2. 统一计算逻辑 (不再区分 type)
+    # 用户上传的“当前持仓金额”
+    current_value = float(data.get('current_value') or data.get('investment_amount') or 0)
+    # 用户上传的“总收益”（如果没有传，则默认本金=当前市值，即初始盈亏为0）
+    total_profit = float(data.get('total_profit', 0))
+    
+    # 计算本金和份额
+    # 份额 = 当前市值 / 确定的 NAV
+    shares = current_value / current_nav if current_nav > 0 else 0
+    # 投入本金 = 当前市值 - 累计收益
+    cost_total = current_value - total_profit
+
+    # 3. 查找并更新持仓
     asset = FundAsset.query.filter_by(user_id=user_id, fund_code=code, group_name=target_group).first()
     
     try:
         if asset:
-            # 合并持仓
-            old_cost = asset.holding_shares * asset.cost_price
+            # 合并持仓：累加份额，重新计算平均成本
+            old_cost_sum = asset.holding_shares * asset.cost_price
             asset.holding_shares += shares
             if asset.holding_shares > 0:
-                asset.cost_price = (old_cost + cost_total) / asset.holding_shares
+                asset.cost_price = (old_cost_sum + cost_total) / asset.holding_shares
             asset.fund_name = fund_name
-            # 🚀 补充可能缺失的 fund_key
             if fund_key: asset.fund_key = fund_key
         else:
             # 新建持仓
             new_asset = FundAsset(
                 user_id=user_id, 
                 fund_code=code, 
-                fund_key=fund_key, # 🚀 永久存储此 Key
+                fund_key=fund_key,
                 fund_name=fund_name,
                 holding_shares=shares, 
-                cost_price=(cost_total/shares if shares > 0 else current_nav),
+                # 初始平均成本价
+                cost_price=(cost_total / shares if shares > 0 else current_nav),
                 group_name=target_group
             )
             db.session.add(new_asset)
         
         db.session.commit()
-        return jsonify({"msg": "保存成功", "fund_key": fund_key}), 201
+        return jsonify({"msg": "保存成功", "shares": round(shares, 4)}), 201
+
     except Exception as e:
         db.session.rollback()
         return jsonify({"msg": f"数据库写入失败: {str(e)}"}), 500
