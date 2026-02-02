@@ -67,13 +67,27 @@ def list_assets():
                 needs_commit = True
         
         # 组装返回给前端的数据
+        # 在循环内部先计算出前端需要的原始数值
+        shares = float(asset.holding_shares or 0)
+        # 市值 = 份额 * 当前净值
+        market_value = shares * float(display_nav)
+        # 总盈亏 = 当前市值 - (份额 * 买入成本价)
+        total_profit = market_value - (shares * float(asset.cost_price or display_nav))
+        # 当日盈亏（简易算法） = 昨日市值 * 当日涨幅
+        day_profit = (shares * float(asset.cost_price or display_nav)) * (gszzl / 100)
+
         results.append({
             "id": asset.id,
             "fund_code": asset.fund_code,
             "fund_name": asset.fund_name,
-            "holding_shares": float(asset.holding_shares),
-            "gsz": display_nav,  # 这里的数字就不会再跳回 1 了
-            "gszzl": gszzl,
+            "group_name": asset.group_name or '默认账户',
+            "holding_shares": shares,
+            "nav": asset.cost_price or display_nav, # 对应前端 item.nav
+            "gsz": display_nav,
+            "daily_pct": gszzl, # 对应前端 item.daily_pct
+            "market_value": market_value, # 👈 必须提供，解决变 NaN 问题
+            "day_profit": day_profit,     # 👈 必须提供
+            "total_profit": total_profit, # 👈 必须提供
             "source": quote.get('source', 'cache') if quote else 'db'
         })
 
@@ -84,7 +98,8 @@ def list_assets():
         except:
             db.session.rollback()
 
-    return jsonify(results)
+    # 🚀 包装在 funds 对象中返回，匹配前端 res.funds
+    return jsonify({"funds": results})
 
 @assets_bp.route('/quotes', methods=['POST'])
 def get_realtime_quotes():
