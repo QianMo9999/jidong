@@ -38,53 +38,53 @@ def get_current_user_id():
 
 @assets_bp.route('/list', methods=['GET'])
 def list_assets():
-    """获取资产列表：包含批量行情抓取和盈亏计算"""
     user_id = get_current_user_id()
-    assets = FundAsset.query.filter_by(user_id=user_id).all()
+    user_assets = FundAsset.query.filter_by(user_id=user_id).all()
     
-    # 批量抓取行情
-    # codes = [a.fund_code for a in assets]
-    fund_items = [
-        {'code': asset.fund_code, 'key': asset.fund_key} 
-        for asset in assets
-    ]
-    quotes = MarketService.batch_get_valuation(fund_items) if codes else {}
+    # 1. 构造请求项
+    fund_items = [{'code': a.fund_code, 'key': a.fund_key} for a in user_assets]
     
-    total_val = 0
-    day_profit = 0
-    funds = []
+    # 2. 获取实时行情
+    quotes = MarketService.batch_get_valuation(fund_items) if fund_items else {}
+    
+    results = []
+    needs_commit = False # 标记是否需要回写数据库
 
-    for a in assets:
-        mkt = quotes.get(a.fund_code, {})
-        nav = float(mkt.get('nav', 1.0))
-        daily_pct = float(mkt.get('gszzl', 0.0)) # 注意对应批量接口字段
+    for asset in user_assets:
+        quote = quotes.get(asset.fund_code)
         
-        cur_val = a.holding_shares * nav
-        # 根据实时涨跌幅反推当日收益
-        d_profit = (cur_val / (1 + daily_pct/100)) * (daily_pct/100) if daily_pct != -100 else -cur_val
+        # 🚀 关键改进：如果接口拿到了数据，就用接口的；否则“锁死”数据库原有的值，不准变1
+        display_nav = asset.cost_price # 默认用资产表里的成本价或上次记录的价格
+        gszzl = 0.0
         
-        total_val += cur_val
-        day_profit += d_profit
-
-        funds.append({
-            "id": a.id,
-            "fund_name": a.fund_name,
-            "fund_code": a.fund_code,
-            "group_name": a.group_name or DEFAULT_GROUP_NAME,
-            "market_value": "{:.2f}".format(cur_val),
-            "current_nav": nav,
-            "daily_pct": daily_pct,
-            "day_profit": round(d_profit, 2),
-            "total_profit": round(cur_val - (a.holding_shares * a.cost_price), 2),
-            "nav_txt": "{:.4f}".format(nav),
-            "holding_shares": a.holding_shares
+        if quote:
+            display_nav = quote.get('gsz', display_nav) # 优先用最新估算净值
+            gszzl = quote.get('gszzl', 0.0)
+            
+            # 🚀 自动修复数据库：如果库里没 key，这次抓到了就补上
+            if not asset.fund_key and quote.get('fund_key'):
+                asset.fund_key = quote['fund_key']
+                needs_commit = True
+        
+        # 组装返回给前端的数据
+        results.append({
+            "id": asset.id,
+            "fund_code": asset.fund_code,
+            "fund_name": asset.fund_name,
+            "holding_shares": float(asset.holding_shares),
+            "gsz": display_nav,  # 这里的数字就不会再跳回 1 了
+            "gszzl": gszzl,
+            "source": quote.get('source', 'cache') if quote else 'db'
         })
 
-    return jsonify({
-        "total_assets": round(total_val, 2),
-        "total_day_profit": round(day_profit, 2),
-        "funds": funds
-    })
+    # 如果补全了 key，执行一次提交，下次刷新就直接飞快了
+    if needs_commit:
+        try:
+            db.session.commit()
+        except:
+            db.session.rollback()
+
+    return jsonify(results)
 
 @assets_bp.route('/quotes', methods=['POST'])
 def get_realtime_quotes():
