@@ -34,12 +34,15 @@ class Config:
         # 构造 MySQL 连接字符串 (使用 pymysql 驱动)
         SQLALCHEMY_DATABASE_URI = f'mysql+pymysql://{mysql_user}:{mysql_pass}@{mysql_addr}/{mysql_db}?charset=utf8mb4'
         
-        # 生产环境连接池配置 (防止连接断开)
+        # 🟢 强化版生产环境连接池配置
         SQLALCHEMY_ENGINE_OPTIONS = {
-            'pool_recycle': 280, # 提前回收连接，防止 MySQL 8小时断开
-            'pool_size': 10,     # 连接池大小
-            'max_overflow': 20   # 允许溢出的最大连接数
+            "pool_pre_ping": True,   # 👈 核心：每次使用连接前先检查是否有效，断了就自动重连
+            "pool_recycle": 120,     # 👈 缩短回收时间：如果连接空闲超过2分钟，则强制替换新连接
+            "pool_size": 10,         
+            "max_overflow": 20,
+            "pool_timeout": 10       # 获取连接等待超时时间
         }
+        
         
     else:
         # --- 本地环境 (SQLite) ---
