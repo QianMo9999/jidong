@@ -5,6 +5,9 @@ import requests
 import redis
 import urllib3
 from flask import current_app, has_app_context
+import akshare as ak
+import pandas as pd
+import time
 
 # 禁用 SSL 警告（配合你之前的 verify=False 策略）
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -33,93 +36,52 @@ class MarketService:
     @classmethod
     def batch_get_valuation(cls, codes):
         """
-        🚀 核心优化：使用天天基金专用批量实时估值接口
+        🚀 使用 AkShare 获取基金实时估算数据 (替代天天基金接口)
+        说明: 此接口返回的是交易时间内的实时估算数据，非交易时间可能无数据。
         """
         if not codes:
             return {}
 
-        # 🟢 补全缺失的定义：清洗代码列表，去除空格和非字符串干扰
-        clean_codes = [str(c).strip() for c in codes if c]
-        if not clean_codes:
-            return {}
-
         results = {}
-        r = cls.get_redis()
         
-        # 1. 优先尝试从 Redis 批量读取缓存
-        remaining_codes = []
-        if r:
-            try:
-                keys = [f"fund_nav:{c}" for c in clean_codes]
-                cached_values = r.mget(keys)
-                for i, val in enumerate(cached_values):
-                    current_code = clean_codes[i]
-                    if val:
-                        data = json.loads(val)
-                        results[current_code] = {
-                            "code": current_code,
-                            "name": data.get('name'),
-                            "nav": data.get('nav'),
-                            "gszzl": data.get('daily_pct'),
-                            "gztime": data.get('update_time')
-                        }
-                    else:
-                        remaining_codes.append(current_code)
-            except Exception as e:
-                print(f"⚠️ Redis 读取异常: {e}")
-                remaining_codes = clean_codes
-        else:
-            remaining_codes = clean_codes
-
-        if not remaining_codes:
-            return results
-
-        # 2. 调用天天基金批量极速接口
+        # 1. 调用 AkShare 实时估值接口
+        # 注意: 该接口可能返回大量数据，我们根据codes进行过滤
         try:
-            # 现在 clean_codes 和 remaining_codes 都有定义了
-            code_str = ",".join(remaining_codes)
-            timestamp = int(time.time() * 1000)
-            url = f"http://fundgz.1234567.com.cn/js/list/{code_str}.js?rt={timestamp}"
+            # 获取所有有估值数据的基金列表
+            estimation_df = ak.fund_em_value_estimation()
             
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Referer": "http://fund.eastmoney.com/",
-                "Accept": "*/*"
-            }
+            # 将接口返回的DataFrame的索引（基金代码）转为字符串，便于匹配
+            estimation_df.index = estimation_df.index.map(str)
             
-            print(f"📡 正在爬取行情: {url}")
-            
-            resp = requests.get(url, headers=headers, timeout=8, verify=False)
-            
-            match = re.search(r'jsonpgz\((.*)\);', resp.text)
-            if match:
-                raw_json = json.loads(match.group(1))
-                for code, item in raw_json.items():
-                    val_data = {
-                        "code": code,
-                        "name": item.get('name'),
-                        "nav": float(item.get('dwjz', 1.0)),
-                        "gszzl": float(item.get('gszzl', 0.0)),
-                        "gztime": item.get('gztime', '')
-                    }
-                    results[code] = val_data
+            # 根据传入的codes列表进行筛选
+            for code in codes:
+                clean_code = str(code).strip()
+                if clean_code in estimation_df.index:
+                    fund_data = estimation_df.loc[clean_code]
                     
-                    if r:
-                        try:
-                            cache_item = {
-                                "name": val_data['name'],
-                                "nav": val_data['nav'],
-                                "daily_pct": val_data['gszzl'],
-                                "update_time": val_data['gztime']
-                            }
-                            r.setex(f"fund_nav:{code}", 600, json.dumps(cache_item))
-                        except: pass
-                print(f"✅ 成功抓取 {len(raw_json)} 只基金数据")
-            else:
-                print(f"⚠️ 接口返回格式不符: {resp.text[:100]}")
-
+                    # 提取关键字段，注意字段名可能随AkShare版本变化，请根据实际情况调整
+                    # ‘估算净值’， ‘估算涨跌幅’
+                    results[clean_code] = {
+                        "code": clean_code,
+                        "name": fund_data.get('名称', 'N/A'),
+                        "nav": fund_data.get('估算净值', 0.0),  # 当前估算净值
+                        "gszzl": fund_data.get('估算涨跌幅', 0.0),  # 估算涨幅（百分比）
+                        "gztime": fund_data.get('估值时间', ''),
+                        # 以下为原接口可能没有的补充信息
+                        "last_nav": fund_data.get('最新净值', 0.0),  # 前一交易日官方净值
+                        "nav_date": fund_data.get('净值日期', ''),
+                    }
+                else:
+                    # 如果code不在估值列表中，可以记录或尝试其他接口
+                    results[clean_code] = {
+                        "code": clean_code,
+                        "error": "未找到该基金的实时估值数据"
+                    }
+                    
         except Exception as e:
-            print(f"❌ 批量抓取行情异常: {e}")
+            print(f"❌ 通过 AkShare 获取估值数据异常: {e}")
+            # 可以选择在这里降级，尝试使用你的原接口或其他备用接口
+            return {"error": f"数据获取失败: {str(e)}"}
 
         return results
 
