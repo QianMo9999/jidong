@@ -245,14 +245,17 @@ def delete_group():
 @assets_bp.route('/delete/<int:id>', methods=['DELETE'])
 def delete_asset(id):
     user_id = get_current_user_id()
-    # 如果带了 ?all=true，则删除该用户下所有该代码的持仓（聚合页删除常用）
-    is_all = request.args.get('all') == 'true'
-    asset = FundAsset.query.filter_by(id=id, user_id=user_id).first()
-    if not asset: return jsonify({"msg": "未找到"}), 404
+    # 增加调试打印
+    print(f"🗑️ 用户 {user_id} 请求删除资产 ID: {id}")
     
-    if is_all:
-        FundAsset.query.filter_by(user_id=user_id, fund_code=asset.fund_code).delete()
-    else:
+    asset = FundAsset.query.filter_by(id=id, user_id=user_id).first()
+    if not asset:
+        return jsonify({"msg": "资产不存在或无权限"}), 404
+        
+    try:
         db.session.delete(asset)
-    db.session.commit()
-    return jsonify({"msg": "已删除"}), 200
+        db.session.commit()
+        return jsonify({"msg": "删除成功"}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"msg": str(e)}), 500

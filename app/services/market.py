@@ -72,14 +72,19 @@ class MarketService:
         # 2. 调用天天基金批量极速接口
         try:
             # 将代码列表拼成 000001,000002 格式
-            code_str = ",".join(remaining_codes)
+            code_str = ",".join(clean_codes)
             timestamp = int(time.time() * 1000)
+            # 天天基金批量接口地址
             url = f"http://fundgz.1234567.com.cn/js/list/{code_str}.js?rt={timestamp}"
             
+            # 🟢 关键：必须伪装得像浏览器，否则会被返回空或 403
             headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                "Referer": "http://fund.eastmoney.com/"
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Referer": "http://fund.eastmoney.com/",
+                "Accept": "*/*"
             }
+            
+            print(f"📡 正在爬取行情: {url}") # 调试用：去云托管日志看这个 URL 点开有没有数据
             
             # 使用 verify=False 绕过你之前遇到的 SSL 证书问题
             resp = requests.get(url, headers=headers, timeout=5, verify=False)
