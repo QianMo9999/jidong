@@ -110,7 +110,7 @@ class MarketService:
                 return code, {
                     "code": code,
                     "name": latest.get('fundName'),
-                    "nav": float(raw_nav = latest.get('lastNetValue') or latest.get('netValue') or 0.0),
+                    "nav": float(latest.get('netValue', 0.0)),
                     "gsz": float(latest.get('forecastNetValue', 0.0)),
                     "gszzl": float(latest.get('forecastGrowth', 0.0)) * 100,
                     "gztime": datetime.fromtimestamp(latest['time'] / 1000).strftime("%H:%M:%S"),
